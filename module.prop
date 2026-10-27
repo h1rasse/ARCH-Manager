@@ -1,0 +1,6 @@
+id=arch-manager
+name=ARCH Manager
+version=0.1.0
+versionCode=1
+author=ARCH Manager Contributors
+description=Rust-based Android kernel capability discovery and safe state controller
