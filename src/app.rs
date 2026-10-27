@@ -7,6 +7,7 @@ use crate::network;
 use crate::profiles::{self, Profile};
 use crate::scheduler;
 use crate::state::{Baseline, ProcessLock};
+use crate::validation;
 use serde_json::Value;
 use std::fs;
 use std::io;
@@ -25,6 +26,8 @@ impl Application {
         self.prepare().map_err(|error| error.to_string())?;
         match arguments.as_slice() {
             [command] if command == "capture" => self.capture(),
+            [command] if command == "validate" => self.validate(false),
+            [command, flag] if command == "validate" && flag == "--json" => self.validate(true),
             [command] if command == "scan" => self.scan(),
             [command] if command == "status" => self.status(false),
             [command, flag] if command == "status" && flag == "--json" => self.status(true),
@@ -129,6 +132,26 @@ impl Application {
     fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.config.state_dir)
             .and_then(|_| fs::create_dir_all(&self.config.profiles_dir))
+    }
+
+    fn validate(&self, json: bool) -> Result<(), String> {
+        let report = validation::run(&self.config);
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string(&report).map_err(|error| error.to_string())?
+            );
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+            );
+        }
+        if report.passed {
+            Ok(())
+        } else {
+            Err("preflight validation failed".to_string())
+        }
     }
 
     fn mode_show(&self) -> Result<(), String> {
@@ -812,6 +835,7 @@ impl Application {
         println!("  archctl scan");
         println!("  archctl status [--json]");
         println!("  archctl capture");
+        println!("  archctl validate [--json]");
         println!("  archctl restore");
         println!("  archctl cpu list");
         println!("  archctl cpu set-governor <policy> <governor>");

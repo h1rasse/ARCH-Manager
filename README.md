@@ -193,3 +193,25 @@ archctl restore
 ```
 
 The congestion controller is changed only when the requested algorithm appears in `tcp_available_congestion_control`. The current value is captured before the write and verified afterward. This phase does not change MTU, routes, firewall state, socket buffers, or other network sysctls.
+
+## Phase 10
+
+Phase 10 completes the canonical roadmap with integrated validation and Magisk/KernelSU lifecycle support. Profile and adaptive automation from earlier phases are exposed through the module action script, while boot service integration remains discovery-only.
+
+```sh
+archctl validate
+archctl validate --json
+```
+
+Validation checks runtime directories, `/sys`, `/proc/sys`, baseline state, capability state, TCP congestion availability, discovery health, and built-in profile availability. Missing baseline or capability files are warnings before the first scan/capture; unavailable kernel control surfaces are reported as failures.
+
+Module actions include:
+
+```sh
+sh action.sh validate
+sh action.sh profile list
+sh action.sh mode set auto
+sh action.sh restore
+```
+
+`service.sh` now runs scan, captures the baseline once, and performs a non-blocking validation pass. It does not start the adaptive daemon or apply a profile automatically. `uninstall.sh` continues to restore the captured baseline before module removal.

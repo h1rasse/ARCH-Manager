@@ -10,3 +10,4 @@ done
 mkdir -p "$STATE_DIR"
 ARCH_MANAGER_ROOT=/data/adb/arch-manager "$ARCHCTL" scan
 [ -f "$STATE_DIR/baseline.json" ] || ARCH_MANAGER_ROOT=/data/adb/arch-manager "$ARCHCTL" capture
+ARCH_MANAGER_ROOT=/data/adb/arch-manager "$ARCHCTL" validate >/dev/null 2>&1 || true

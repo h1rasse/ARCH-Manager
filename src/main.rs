@@ -8,6 +8,7 @@ mod network;
 mod profiles;
 mod scheduler;
 mod state;
+mod validation;
 
 use app::Application;
 use config::RuntimeConfig;
