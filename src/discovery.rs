@@ -1,4 +1,5 @@
 use crate::core;
+use crate::network;
 use crate::scheduler;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -18,6 +19,7 @@ pub struct Capabilities {
     pub scheduler: scheduler::SchedulerCapabilities,
     pub cores: Vec<core::CpuCore>,
     pub cooling_devices: Vec<ThermalCoolingDevice>,
+    pub network: network::NetworkCapabilities,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +133,7 @@ pub fn scan() -> Capabilities {
         scheduler: scheduler::discover(),
         cores: core::discover(),
         cooling_devices: discover_cooling_devices(),
+        network: network::discover(),
     }
 }
 
@@ -174,6 +177,7 @@ pub fn capture_baseline() -> BTreeMap<String, String> {
 
     values.extend(scheduler::capture_baseline());
     values.extend(core::capture_baseline());
+    values.extend(network::capture_baseline());
 
     values
 }

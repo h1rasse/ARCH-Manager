@@ -4,6 +4,7 @@ mod config;
 mod core;
 mod discovery;
 mod logging;
+mod network;
 mod profiles;
 mod scheduler;
 mod state;

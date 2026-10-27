@@ -3,6 +3,7 @@ use crate::config::RuntimeConfig;
 use crate::core;
 use crate::discovery;
 use crate::logging;
+use crate::network;
 use crate::profiles::{self, Profile};
 use crate::scheduler;
 use crate::state::{Baseline, ProcessLock};
@@ -51,6 +52,17 @@ impl Application {
             }
             [command, action] if command == "scheduler" && action == "list" => {
                 self.scheduler_list()
+            }
+            [command, action] if command == "network" && action == "list" => self.network_list(),
+            [command, category, action]
+                if command == "network" && category == "tcp" && action == "list" =>
+            {
+                self.network_tcp_list()
+            }
+            [command, category, action, algorithm]
+                if command == "network" && category == "tcp" && action == "set-congestion" =>
+            {
+                self.set_tcp_congestion(algorithm)
             }
             [command, action] if command == "profile" && action == "list" => self.profile_list(),
             [command, action, name] if command == "profile" && action == "show" => {
@@ -382,6 +394,43 @@ impl Application {
             serde_json::to_string_pretty(&capabilities.scheduler)
                 .map_err(|error| error.to_string())?
         );
+        Ok(())
+    }
+
+    fn network_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.network.interfaces)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn network_tcp_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.network.tcp)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn set_tcp_congestion(&self, algorithm: &str) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let algorithm = network::validate_algorithm(algorithm)?;
+        let target = network::congestion_path();
+        ensure_writable(&target)?;
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, &algorithm)?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!("TCP congestion control set to {algorithm}"),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("TCP congestion control updated: {algorithm}");
         Ok(())
     }
 
@@ -782,6 +831,9 @@ impl Application {
         println!("  archctl scheduler list");
         println!("  archctl scheduler set-uclamp-min <group> <0-1024>");
         println!("  archctl scheduler set-uclamp-max <group> <0-1024>");
+        println!("  archctl network list");
+        println!("  archctl network tcp list");
+        println!("  archctl network tcp set-congestion <algorithm>");
         println!("  archctl profile list");
         println!("  archctl profile show <name>");
         println!("  archctl profile apply <name> [--dry-run]");
@@ -1064,6 +1116,7 @@ mod tests {
         core_number, parse_frequency, parse_uclamp, resolve_cooling_state_path,
         resolve_devfreq_path, resolve_policy_path, validate_write_path,
     };
+    use crate::network;
     use std::path::Path;
 
     #[test]
@@ -1115,5 +1168,10 @@ mod tests {
     fn rejects_invalid_cooling_selectors() {
         assert!(resolve_cooling_state_path("cooling_device0/cur_state").is_err());
         assert!(resolve_cooling_state_path("cooling$name").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_tcp_congestion_names() {
+        assert!(network::validate_algorithm("reno$name").is_err());
     }
 }

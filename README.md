@@ -180,3 +180,16 @@ archctl restore
 Cooling control is boost-only: ARCH Manager can increase a cooling device state, but it rejects requests that reduce or disable cooling. The requested state must not exceed `max_state`.
 
 Core control never offlines CPU0 or the last online CPU. Bringing a core online is protected by the thermal guard; taking a core offline remains available for thermal or battery management. Core online nodes are included in baseline capture and restore. Device-specific paths and permissions remain dependent on the Android kernel.
+
+## Phase 9
+
+Phase 9 adds network interface discovery and TCP congestion control. The scanner reports interface state, carrier, MTU, link speed, duplex, MAC address, and TCP congestion algorithms exposed by the kernel.
+
+```sh
+archctl network list
+archctl network tcp list
+archctl network tcp set-congestion cubic
+archctl restore
+```
+
+The congestion controller is changed only when the requested algorithm appears in `tcp_available_congestion_control`. The current value is captured before the write and verified afterward. This phase does not change MTU, routes, firewall state, socket buffers, or other network sysctls.
