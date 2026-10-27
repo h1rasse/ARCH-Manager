@@ -101,3 +101,32 @@ ARCH_MANAGER_THERMAL_LIMIT_MC=52000 archctl thermal check
 ```
 
 CPU and GPU operations that increase a frequency limit or select a performance governor are rejected when the hottest readable thermal zone reaches the threshold. Operations that reduce limits and `restore` remain available. The guard is evaluated only during explicit CLI writes and does not start a boot daemon or modify thermal trip points.
+
+## Phase 5
+
+Phase 5 adds the profile engine. Built-in profiles are `stock`, `balanced`, `battery`, `performance`, and `gaming`. Profiles apply governor and optional frequency settings only through explicit commands.
+
+```sh
+archctl profile list
+archctl profile show balanced
+archctl profile apply balanced --dry-run
+archctl profile apply balanced
+archctl profile restore
+```
+
+The `stock` profile restores the captured baseline. Custom profiles can be placed under `/data/adb/arch-manager/profiles` as JSON files. The schema is:
+
+```json
+{
+  "name": "custom",
+  "description": "Custom device profile",
+  "cpu_governor": "schedutil",
+  "cpu_min_freq": null,
+  "cpu_max_freq": null,
+  "gpu_governor": null,
+  "gpu_min_freq": null,
+  "gpu_max_freq": null
+}
+```
+
+Unsupported governors are skipped per device. Frequency changes still use capability validation, baseline capture, write verification, and the Phase 4 thermal guard. Profiles are not applied automatically by the boot service.

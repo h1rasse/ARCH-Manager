@@ -9,6 +9,7 @@ pub struct RuntimeConfig {
     pub lock_file: PathBuf,
     pub capabilities_file: PathBuf,
     pub baseline_file: PathBuf,
+    pub profiles_dir: PathBuf,
 }
 
 impl RuntimeConfig {
@@ -17,6 +18,7 @@ impl RuntimeConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/data/adb/arch-manager"));
         let state_dir = root_dir.join("state");
+        let profiles_dir = root_dir.join("profiles");
 
         Self {
             root_dir,
@@ -24,6 +26,7 @@ impl RuntimeConfig {
             lock_file: state_dir.join("archctl.lock"),
             capabilities_file: state_dir.join("capabilities.json"),
             baseline_file: state_dir.join("baseline.json"),
+            profiles_dir,
             state_dir,
         }
     }

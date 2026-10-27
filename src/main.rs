@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod discovery;
 mod logging;
+mod profiles;
 mod state;
 
 use app::Application;

@@ -1,6 +1,7 @@
 use crate::config::RuntimeConfig;
 use crate::discovery;
 use crate::logging;
+use crate::profiles::{self, Profile};
 use crate::state::{Baseline, ProcessLock};
 use serde_json::Value;
 use std::fs;
@@ -28,6 +29,19 @@ impl Application {
             [command, action] if command == "gpu" && action == "list" => self.gpu_list(),
             [command, action] if command == "thermal" && action == "list" => self.thermal_list(),
             [command, action] if command == "thermal" && action == "check" => self.thermal_check(),
+            [command, action] if command == "profile" && action == "list" => self.profile_list(),
+            [command, action, name] if command == "profile" && action == "show" => {
+                self.profile_show(name)
+            }
+            [command, action, name] if command == "profile" && action == "apply" => {
+                self.profile_apply(name, false)
+            }
+            [command, action, name, flag]
+                if command == "profile" && action == "apply" && flag == "--dry-run" =>
+            {
+                self.profile_apply(name, true)
+            }
+            [command, action] if command == "profile" && action == "restore" => self.restore(),
             [command, action, policy, value] if command == "cpu" && action == "set-governor" => {
                 self.set_cpu_governor(policy, value)
             }
@@ -60,6 +74,7 @@ impl Application {
 
     fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.config.state_dir)
+            .and_then(|_| fs::create_dir_all(&self.config.profiles_dir))
     }
 
     fn scan(&self) -> Result<(), String> {
@@ -159,6 +174,152 @@ impl Application {
             serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
         );
         Ok(())
+    }
+
+    fn profile_list(&self) -> Result<(), String> {
+        let mut profiles = profiles::builtin_profiles();
+        for name in profiles::custom_names(&self.config.profiles_dir) {
+            if let Ok(profile) = profiles::load(&name, &self.config.profiles_dir) {
+                profiles.push(profile);
+            }
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&profiles).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn profile_show(&self, name: &str) -> Result<(), String> {
+        let profile = self.load_profile(name)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&profile).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn profile_apply(&self, name: &str, dry_run: bool) -> Result<(), String> {
+        let profile = self.load_profile(name)?;
+        if profile.name == "stock" {
+            if dry_run {
+                println!("Dry run: restore captured baseline");
+                return Ok(());
+            }
+            return self.restore();
+        }
+        let capabilities = discovery::scan();
+        let mut attempted = 0_u32;
+        let mut failed = 0_u32;
+
+        for policy in &capabilities.cpu_policies {
+            let name = policy_name(&policy.path)?;
+            if let Some(governor) = profile.cpu_governor.as_deref() {
+                if policy
+                    .available_governors
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .any(|value| value == governor)
+                {
+                    attempted += 1;
+                    if dry_run {
+                        println!("Dry run: CPU {name} governor -> {governor}");
+                    } else if let Err(error) = self.set_cpu_governor(&name, governor) {
+                        failed += 1;
+                        eprintln!("Skipped CPU {name} governor: {error}");
+                    }
+                } else {
+                    eprintln!("Skipped CPU {name}: governor unavailable: {governor}");
+                }
+            }
+            if let Some(frequency) = profile.cpu_max_freq {
+                attempted += 1;
+                if dry_run {
+                    println!("Dry run: CPU {name} maximum frequency -> {frequency}");
+                } else if let Err(error) =
+                    self.set_cpu_frequency(&name, "scaling_max_freq", &frequency.to_string())
+                {
+                    failed += 1;
+                    eprintln!("Skipped CPU {name} maximum frequency: {error}");
+                }
+            }
+            if let Some(frequency) = profile.cpu_min_freq {
+                attempted += 1;
+                if dry_run {
+                    println!("Dry run: CPU {name} minimum frequency -> {frequency}");
+                } else if let Err(error) =
+                    self.set_cpu_frequency(&name, "scaling_min_freq", &frequency.to_string())
+                {
+                    failed += 1;
+                    eprintln!("Skipped CPU {name} minimum frequency: {error}");
+                }
+            }
+        }
+
+        for device in &capabilities.devfreq_devices {
+            let name = device_name(&device.path)?;
+            if let Some(governor) = profile.gpu_governor.as_deref() {
+                if device
+                    .available_governors
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .any(|value| value == governor)
+                {
+                    attempted += 1;
+                    if dry_run {
+                        println!("Dry run: GPU {name} governor -> {governor}");
+                    } else if let Err(error) = self.set_gpu_governor(&name, governor) {
+                        failed += 1;
+                        eprintln!("Skipped GPU {name} governor: {error}");
+                    }
+                } else {
+                    eprintln!("Skipped GPU {name}: governor unavailable: {governor}");
+                }
+            }
+            if let Some(frequency) = profile.gpu_max_freq {
+                attempted += 1;
+                if dry_run {
+                    println!("Dry run: GPU {name} maximum frequency -> {frequency}");
+                } else if let Err(error) =
+                    self.set_gpu_frequency(&name, "max_freq", &frequency.to_string())
+                {
+                    failed += 1;
+                    eprintln!("Skipped GPU {name} maximum frequency: {error}");
+                }
+            }
+            if let Some(frequency) = profile.gpu_min_freq {
+                attempted += 1;
+                if dry_run {
+                    println!("Dry run: GPU {name} minimum frequency -> {frequency}");
+                } else if let Err(error) =
+                    self.set_gpu_frequency(&name, "min_freq", &frequency.to_string())
+                {
+                    failed += 1;
+                    eprintln!("Skipped GPU {name} minimum frequency: {error}");
+                }
+            }
+        }
+
+        if dry_run {
+            println!("Dry run completed: {attempted} planned operation(s)");
+        } else if failed == 0 {
+            println!(
+                "Profile applied: {} ({attempted} operation(s))",
+                profile.name
+            );
+        } else {
+            println!(
+                "Profile partially applied: {} ({failed} failure(s))",
+                profile.name
+            );
+        }
+        Ok(())
+    }
+
+    fn load_profile(&self, name: &str) -> Result<Profile, String> {
+        profiles::load(name, &self.config.profiles_dir)
     }
 
     fn set_cpu_governor(&self, policy: &str, governor: &str) -> Result<(), String> {
@@ -354,7 +515,27 @@ impl Application {
         println!("  archctl gpu set-max <device> <frequency>");
         println!("  archctl thermal list");
         println!("  archctl thermal check");
+        println!("  archctl profile list");
+        println!("  archctl profile show <name>");
+        println!("  archctl profile apply <name> [--dry-run]");
+        println!("  archctl profile restore");
     }
+}
+
+fn policy_name(path: &str) -> Result<String, String> {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("invalid CPU policy path: {path}"))
+}
+
+fn device_name(path: &str) -> Result<String, String> {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("invalid Devfreq device path: {path}"))
 }
 
 fn thermal_limit_millicelsius() -> i64 {
