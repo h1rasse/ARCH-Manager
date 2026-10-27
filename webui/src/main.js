@@ -1,4 +1,5 @@
 import { exec } from "kernelsu";
+import { createIcons, Home, Cpu, Gauge, SlidersHorizontal, Ellipsis, Activity, RefreshCw, Thermometer, Workflow, Network, Settings, ArrowRight } from "lucide";
 import "./styles.css";
 import * as L from "./logic.js";
 
@@ -16,7 +17,8 @@ const SOURCES = {
   Settings: { mode: ["mode", "show"], daemon: ["daemon", "status"] }
 };
 const MODE_HELP = { auto: "Balanced while the screen is on, stock while off", performance: "Performance in both screen states", battery: "Battery mode while on, stock while off", strict: "Stock values in every state" };
-const NAV_ICONS = { Dashboard: "⌂", CPU: "◈", GPU: "◉", Profiles: "✦", More: "•••" };
+const NAV_ICONS = { Dashboard: "home", CPU: "cpu", GPU: "gauge", Profiles: "sliders-horizontal", More: "ellipsis" };
+const LUCIDE_ICONS = { Home, Cpu, Gauge, SlidersHorizontal, Ellipsis, Activity, RefreshCw, Thermometer, Workflow, Network, Settings, ArrowRight };
 
 let page = "Dashboard";
 let data = {};
@@ -210,23 +212,22 @@ const views = {
 
 function renderMore() {
   const items = [
-    ["Thermal", "Temperature protection and cooling devices", "◌"],
-    ["Scheduler", "Uclamp task priority controls", "⌁"],
-    ["Network", "TCP congestion and interfaces", "⌁"],
-    ["Settings", "Adaptive mode and interface preferences", "⚙"]
+    ["Thermal", "Temperature protection and cooling devices", "thermometer"],
+    ["Scheduler", "Uclamp task priority controls", "workflow"],
+    ["Network", "TCP congestion and interfaces", "network"],
+    ["Settings", "Adaptive mode and interface preferences", "settings"]
   ];
-  return `<div class="page-intro"><span class="eyebrow">ARCH MANAGER</span><h2>More controls</h2><p>Advanced tools are grouped here to keep the main dashboard focused.</p></div><div class="more-grid">${items.map(([name, description, icon]) => `<button class="more-card" data-page="${name}"><span class="more-icon">${icon}</span><span><strong>${name}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</div>${card("Interface mode", `<div class="setting-row"><div><strong>${simpleMode ? "Simple mode" : "Advanced mode"}</strong><p class="muted">Switch between focused controls and full diagnostics.</p></div><button class="ghost" data-act="toggle-mode">Use ${simpleMode ? "Advanced" : "Simple"}</button></div>`)}`;
+  return `<div class="page-intro"><span class="eyebrow">ARCH MANAGER</span><h2>More controls</h2><p>Advanced tools are grouped here to keep the main dashboard focused.</p></div><div class="more-grid">${items.map(([name, description, icon]) => `<button class="more-card" data-page="${name}"><span class="more-icon"><i data-lucide="${icon}" aria-hidden="true"></i></span><span><strong>${name}</strong><small>${description}</small></span><i class="more-arrow" data-lucide="arrow-right" aria-hidden="true"></i></button>`).join("")}</div>${card("Interface mode", `<div class="setting-row"><div><strong>${simpleMode ? "Simple mode" : "Advanced mode"}</strong><p class="muted">Switch between focused controls and full diagnostics.</p></div><button class="ghost" data-act="toggle-mode">Use ${simpleMode ? "Advanced" : "Simple"}</button></div>`)}`;
 }
-
 function renderNav() {
-  document.querySelector("#nav").innerHTML = PAGES.map((item) => `<button class="nav-item ${item === page ? "on" : ""}" data-page="${item}" ${item === page ? 'aria-current="page"' : ""}><span class="nav-icon">${NAV_ICONS[item]}</span><span>${item === "Dashboard" ? "Home" : item}</span></button>`).join("");
+  document.querySelector("#nav").innerHTML = PAGES.map((item) => `<button class="nav-item ${item === page ? "on" : ""}" data-page="${item}" ${item === page ? 'aria-current="page"' : ""}><i class="nav-icon" data-lucide="${NAV_ICONS[item]}" aria-hidden="true"></i><span>${item === "Dashboard" ? "Home" : item}</span></button>`).join("");
 }
 
 function render() {
   const result = last ? `<div class="toast ${last.ok ? "ok" : "bad"}"><strong>${last.ok ? "Done" : "Unable to update"}</strong><span>${esc(last.text ?? "")}</span><button class="ghost" data-act="dismiss">×</button></div>` : "";
   view.innerHTML = result + (page === "More" ? renderMore() : views[page]());
   renderNav();
-  document.querySelector("#page-label").textContent = page === "Dashboard" ? "Performance Console" : page;
+  createIcons({ icons: LUCIDE_ICONS, attrs: { "stroke-width": 1.8 } });
 }
 
 async function preview(name) {

@@ -4,14 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#08090c">
+<meta name="theme-color" content="#090b10">
 <title>ARCH Manager</title>
 <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
 </head>
 <body>
-<header><div><h1>ARCH Manager</h1><span id="page-label">Performance Console</span></div><button id="reload" class="ghost" aria-label="Refresh">↻</button></header>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand" aria-label="ARCH Manager">
+      <span class="brand-mark"><i data-lucide="activity" aria-hidden="true"></i></span>
+      <span class="brand-copy"><strong>ARCH<span>MANAGER</span></strong><small>Kernel performance suite</small></span>
+    </div>
+    <button id="reload" class="icon-button" aria-label="Refresh data"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
+  </div>
+</header>
 <main id="view" aria-live="polite"></main>
-<nav id="nav" aria-label="Sections"></nav>
+<nav id="nav" aria-label="Main navigation"></nav>
 <dialog id="dlg"><h2 id="dt"></h2><div id="db"></div><div class="row"><button id="no" class="ghost">Cancel</button><button id="yes">Confirm</button></div></dialog>
 <script type="module" src="/src/main.js"></script>
 </body>

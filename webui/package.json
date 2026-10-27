@@ -8,6 +8,11 @@
     "build": "vite build",
     "test": "node --test tests/*.test.js"
   },
-  "dependencies": { "kernelsu": "^1.0.0" },
-  "devDependencies": { "vite": "^5.4.0" }
+  "dependencies": {
+    "kernelsu": "^1.0.0",
+    "lucide": "^1.62.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
 }
