@@ -1,6 +1,7 @@
 mod adaptive;
 mod app;
 mod config;
+mod core;
 mod discovery;
 mod logging;
 mod profiles;

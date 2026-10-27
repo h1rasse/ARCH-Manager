@@ -1,5 +1,6 @@
 use crate::adaptive::{self, Mode, ScreenState};
 use crate::config::RuntimeConfig;
+use crate::core;
 use crate::discovery;
 use crate::logging;
 use crate::profiles::{self, Profile};
@@ -31,6 +32,23 @@ impl Application {
             [command, action] if command == "gpu" && action == "list" => self.gpu_list(),
             [command, action] if command == "thermal" && action == "list" => self.thermal_list(),
             [command, action] if command == "thermal" && action == "check" => self.thermal_check(),
+            [command, category, action]
+                if command == "thermal" && category == "cooling" && action == "list" =>
+            {
+                self.thermal_cooling_list()
+            }
+            [command, category, action, device, state]
+                if command == "thermal" && category == "cooling" && action == "boost" =>
+            {
+                self.thermal_cooling_boost(device, state)
+            }
+            [command, action] if command == "core" && action == "list" => self.core_list(),
+            [command, action, cpu] if command == "core" && action == "online" => {
+                self.set_core(cpu, true)
+            }
+            [command, action, cpu] if command == "core" && action == "offline" => {
+                self.set_core(cpu, false)
+            }
             [command, action] if command == "scheduler" && action == "list" => {
                 self.scheduler_list()
             }
@@ -260,6 +278,100 @@ impl Application {
             "{}",
             serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
         );
+        Ok(())
+    }
+
+    fn thermal_cooling_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.cooling_devices)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn thermal_cooling_boost(&self, device: &str, state: &str) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let requested = state
+            .parse::<u64>()
+            .map_err(|_| format!("invalid cooling state: {state}"))?;
+        let target = resolve_cooling_state_path(device)?;
+        let current = read_required(&target)?
+            .parse::<u64>()
+            .map_err(|_| format!("invalid current cooling state: {}", target.display()))?;
+        let maximum = target
+            .parent()
+            .and_then(|path| read_required(&path.join("max_state")).ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        if let Some(maximum) = maximum {
+            if requested > maximum {
+                return Err(format!(
+                    "cooling state exceeds maximum: {requested} > {maximum}"
+                ));
+            }
+        }
+        if requested <= current {
+            return Err(format!(
+                "cooling boost must increase state: {requested} <= {current}"
+            ));
+        }
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, &requested.to_string())?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!("thermal cooling boosted for {device}"),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("Thermal cooling boosted: {device} -> {requested}");
+        Ok(())
+    }
+
+    fn core_list(&self) -> Result<(), String> {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&core::discover()).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn set_core(&self, cpu: &str, online: bool) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let number = core_number(cpu)?;
+        if !online && number == 0 {
+            return Err("CPU0 cannot be taken offline".to_string());
+        }
+        let target = core::resolve_online_path(cpu)?;
+        let current = read_required(&target)?
+            .parse::<u8>()
+            .map_err(|_| format!("invalid current online state: {}", target.display()))?
+            != 0;
+        if current == online {
+            println!(
+                "CPU{number} already {}",
+                if online { "online" } else { "offline" }
+            );
+            return Ok(());
+        }
+        if !online && core::discover().iter().filter(|core| core.online).count() <= 1 {
+            return Err("cannot offline the last online CPU core".to_string());
+        }
+        if online {
+            ensure_thermal_safe_for_increase()?;
+        }
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, if online { "1" } else { "0" })?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!(
+                "CPU core {number} set {}",
+                if online { "online" } else { "offline" }
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("CPU{number} {}", if online { "online" } else { "offline" });
         Ok(())
     }
 
@@ -662,6 +774,11 @@ impl Application {
         println!("  archctl gpu set-max <device> <frequency>");
         println!("  archctl thermal list");
         println!("  archctl thermal check");
+        println!("  archctl thermal cooling list");
+        println!("  archctl thermal cooling boost <device> <state>");
+        println!("  archctl core list");
+        println!("  archctl core online <cpu>");
+        println!("  archctl core offline <cpu>");
         println!("  archctl scheduler list");
         println!("  archctl scheduler set-uclamp-min <group> <0-1024>");
         println!("  archctl scheduler set-uclamp-max <group> <0-1024>");
@@ -682,6 +799,35 @@ fn policy_name(path: &str) -> Result<String, String> {
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .ok_or_else(|| format!("invalid CPU policy path: {path}"))
+}
+
+fn resolve_cooling_state_path(device: &str) -> Result<PathBuf, String> {
+    let name = Path::new(device)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("invalid cooling device: {device}"))?;
+    if !name.starts_with("cooling_device")
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(format!("invalid cooling device: {device}"));
+    }
+    let path = PathBuf::from("/sys/class/thermal")
+        .join(name)
+        .join("cur_state");
+    if !path.is_file() || !is_writable(&path) {
+        return Err(format!("cooling device is not writable: {name}"));
+    }
+    Ok(path)
+}
+
+fn core_number(value: &str) -> Result<u32, String> {
+    value
+        .strip_prefix("cpu")
+        .unwrap_or(value)
+        .parse::<u32>()
+        .map_err(|_| format!("invalid CPU core: {value}"))
 }
 
 fn device_name(path: &str) -> Result<String, String> {
@@ -915,8 +1061,8 @@ fn lock_error(error: io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_frequency, parse_uclamp, resolve_devfreq_path, resolve_policy_path,
-        validate_write_path,
+        core_number, parse_frequency, parse_uclamp, resolve_cooling_state_path,
+        resolve_devfreq_path, resolve_policy_path, validate_write_path,
     };
     use std::path::Path;
 
@@ -956,5 +1102,18 @@ mod tests {
         assert_eq!(parse_uclamp("0").unwrap(), 0);
         assert_eq!(parse_uclamp("1024").unwrap(), 1024);
         assert!(parse_uclamp("1025").is_err());
+    }
+
+    #[test]
+    fn parses_core_selectors() {
+        assert_eq!(core_number("cpu3").unwrap(), 3);
+        assert_eq!(core_number("3").unwrap(), 3);
+        assert!(core_number("cpu-x").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_cooling_selectors() {
+        assert!(resolve_cooling_state_path("cooling_device0/cur_state").is_err());
+        assert!(resolve_cooling_state_path("cooling$name").is_err());
     }
 }

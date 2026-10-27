@@ -163,3 +163,20 @@ archctl restore
 ```
 
 Supported groups are `top-app`, `foreground`, `background`, `system-background`, and `restricted`. Uclamp values are limited to 0–1024. Increasing uclamp is protected by the thermal guard, and scheduler nodes are included in baseline capture and restore. `schedtune` nodes are discovery-only in this phase.
+
+## Phase 8
+
+Phase 8 adds thermal cooling-device management and explicit CPU core online/offline control.
+
+```sh
+archctl thermal cooling list
+archctl thermal cooling boost cooling_device0 1
+archctl core list
+archctl core online cpu4
+archctl core offline cpu4
+archctl restore
+```
+
+Cooling control is boost-only: ARCH Manager can increase a cooling device state, but it rejects requests that reduce or disable cooling. The requested state must not exceed `max_state`.
+
+Core control never offlines CPU0 or the last online CPU. Bringing a core online is protected by the thermal guard; taking a core offline remains available for thermal or battery management. Core online nodes are included in baseline capture and restore. Device-specific paths and permissions remain dependent on the Android kernel.

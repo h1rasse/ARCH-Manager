@@ -1,3 +1,4 @@
+use crate::core;
 use crate::scheduler;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -15,6 +16,8 @@ pub struct Capabilities {
     pub memory: MemoryCapabilities,
     pub block_devices: Vec<BlockDevice>,
     pub scheduler: scheduler::SchedulerCapabilities,
+    pub cores: Vec<core::CpuCore>,
+    pub cooling_devices: Vec<ThermalCoolingDevice>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +77,15 @@ pub struct ThermalZone {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ThermalCoolingDevice {
+    pub path: String,
+    pub device_type: Option<String>,
+    pub current_state: Option<u64>,
+    pub max_state: Option<u64>,
+    pub writable: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PowerSupply {
     pub path: String,
     pub supply_type: Option<String>,
@@ -117,6 +129,8 @@ pub fn scan() -> Capabilities {
         memory: discover_memory(),
         block_devices: discover_block_devices(),
         scheduler: scheduler::discover(),
+        cores: core::discover(),
+        cooling_devices: discover_cooling_devices(),
     }
 }
 
@@ -159,6 +173,7 @@ pub fn capture_baseline() -> BTreeMap<String, String> {
     }
 
     values.extend(scheduler::capture_baseline());
+    values.extend(core::capture_baseline());
 
     values
 }
@@ -314,6 +329,27 @@ fn discover_thermal_zones() -> Vec<ThermalZone> {
                 critical_trip_millicelsius: critical_trip(&path, &trip_points),
                 trip_points,
             }
+        })
+        .collect()
+}
+
+fn discover_cooling_devices() -> Vec<ThermalCoolingDevice> {
+    entries(Path::new("/sys/class/thermal"))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("cooling_device"))
+        })
+        .map(|path| ThermalCoolingDevice {
+            path: path.display().to_string(),
+            device_type: read_value(&path.join("type")),
+            current_state: read_value(&path.join("cur_state")).and_then(|value| value.parse().ok()),
+            max_state: read_value(&path.join("max_state")).and_then(|value| value.parse().ok()),
+            writable: ["cur_state"]
+                .iter()
+                .filter(|name| path.join(name).is_file() && is_writable(&path.join(name)))
+                .map(|name| (*name).to_string())
+                .collect(),
         })
         .collect()
 }
