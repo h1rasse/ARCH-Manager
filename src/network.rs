@@ -39,13 +39,14 @@ pub fn discover() -> NetworkCapabilities {
 }
 
 pub fn capture_baseline() -> BTreeMap<String, String> {
-    read_value(&congestion_path())
-        .map(|value| {
-            [(congestion_path().display().to_string(), value)]
-                .into_iter()
-                .collect()
-        })
-        .unwrap_or_default()
+    let path = congestion_path();
+    if is_writable(&path) {
+        read_value(&path)
+            .map(|value| [(path.display().to_string(), value)].into_iter().collect())
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    }
 }
 
 pub fn congestion_path() -> PathBuf {
