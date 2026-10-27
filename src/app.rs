@@ -3,6 +3,7 @@ use crate::config::RuntimeConfig;
 use crate::discovery;
 use crate::logging;
 use crate::profiles::{self, Profile};
+use crate::scheduler;
 use crate::state::{Baseline, ProcessLock};
 use serde_json::Value;
 use std::fs;
@@ -30,6 +31,9 @@ impl Application {
             [command, action] if command == "gpu" && action == "list" => self.gpu_list(),
             [command, action] if command == "thermal" && action == "list" => self.thermal_list(),
             [command, action] if command == "thermal" && action == "check" => self.thermal_check(),
+            [command, action] if command == "scheduler" && action == "list" => {
+                self.scheduler_list()
+            }
             [command, action] if command == "profile" && action == "list" => self.profile_list(),
             [command, action, name] if command == "profile" && action == "show" => {
                 self.profile_show(name)
@@ -69,6 +73,16 @@ impl Application {
             }
             [command, action, device, value] if command == "gpu" && action == "set-max" => {
                 self.set_gpu_frequency(device, "max_freq", value)
+            }
+            [command, action, group, value]
+                if command == "scheduler" && action == "set-uclamp-min" =>
+            {
+                self.set_uclamp(group, "min", value)
+            }
+            [command, action, group, value]
+                if command == "scheduler" && action == "set-uclamp-max" =>
+            {
+                self.set_uclamp(group, "max", value)
             }
             [command] if command == "help" => {
                 Self::print_help();
@@ -246,6 +260,66 @@ impl Application {
             "{}",
             serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
         );
+        Ok(())
+    }
+
+    fn scheduler_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.scheduler)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn set_uclamp(&self, group: &str, attribute: &str, value: &str) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let requested = parse_uclamp(value)?;
+        let target = scheduler::resolve_uclamp_path(group, attribute)?;
+        let current = read_optional_u64(&target);
+        let opposite = match attribute {
+            "min" => read_optional_u64(
+                &target
+                    .parent()
+                    .ok_or_else(|| "invalid uclamp path".to_string())?
+                    .join("cpu.uclamp.max"),
+            ),
+            "max" => read_optional_u64(
+                &target
+                    .parent()
+                    .ok_or_else(|| "invalid uclamp path".to_string())?
+                    .join("cpu.uclamp.min"),
+            ),
+            _ => return Err(format!("invalid uclamp attribute: {attribute}")),
+        };
+        if attribute == "min" {
+            if let Some(maximum) = opposite {
+                if requested > maximum {
+                    return Err(format!(
+                        "uclamp minimum exceeds maximum: {requested} > {maximum}"
+                    ));
+                }
+            }
+        } else if let Some(minimum) = opposite {
+            if requested < minimum {
+                return Err(format!(
+                    "uclamp maximum is below minimum: {requested} < {minimum}"
+                ));
+            }
+        }
+        if current.map(|value| requested > value).unwrap_or(true) {
+            ensure_thermal_safe_for_increase()?;
+        }
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, &requested.to_string())?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!("uclamp {attribute} set for {group}"),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("uclamp updated: {group} {attribute} -> {requested}");
         Ok(())
     }
 
@@ -588,6 +662,9 @@ impl Application {
         println!("  archctl gpu set-max <device> <frequency>");
         println!("  archctl thermal list");
         println!("  archctl thermal check");
+        println!("  archctl scheduler list");
+        println!("  archctl scheduler set-uclamp-min <group> <0-1024>");
+        println!("  archctl scheduler set-uclamp-max <group> <0-1024>");
         println!("  archctl profile list");
         println!("  archctl profile show <name>");
         println!("  archctl profile apply <name> [--dry-run]");
@@ -628,6 +705,16 @@ fn daemon_interval(value: Option<&str>) -> Result<u64, String> {
         return Err("daemon interval must be between 2 and 300 seconds".to_string());
     }
     Ok(interval)
+}
+
+fn parse_uclamp(value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| format!("invalid uclamp value: {value}"))?;
+    if parsed > 1024 {
+        return Err(format!("uclamp value must be between 0 and 1024: {parsed}"));
+    }
+    Ok(parsed)
 }
 
 fn thermal_limit_millicelsius() -> i64 {
@@ -806,7 +893,10 @@ fn write_and_verify(path: &Path, value: &str) -> Result<(), String> {
 
 fn validate_write_path(path: &Path) -> Result<(), String> {
     let path = path.to_string_lossy();
-    let allowed = path.starts_with("/sys/") || path.starts_with("/proc/sys/");
+    let allowed = path.starts_with("/sys/")
+        || path.starts_with("/proc/sys/")
+        || path.starts_with("/dev/cpuctl/")
+        || path.starts_with("/dev/stune/");
     if allowed {
         Ok(())
     } else {
@@ -824,7 +914,10 @@ fn lock_error(error: io::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_frequency, resolve_devfreq_path, resolve_policy_path, validate_write_path};
+    use super::{
+        parse_frequency, parse_uclamp, resolve_devfreq_path, resolve_policy_path,
+        validate_write_path,
+    };
     use std::path::Path;
 
     #[test]
@@ -856,5 +949,12 @@ mod tests {
     fn rejects_invalid_devfreq_names() {
         assert!(resolve_devfreq_path("gpu/device").is_err());
         assert!(resolve_devfreq_path("gpu$name").is_err());
+    }
+
+    #[test]
+    fn validates_uclamp_range() {
+        assert_eq!(parse_uclamp("0").unwrap(), 0);
+        assert_eq!(parse_uclamp("1024").unwrap(), 1024);
+        assert!(parse_uclamp("1025").is_err());
     }
 }

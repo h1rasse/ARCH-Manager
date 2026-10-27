@@ -4,6 +4,7 @@ mod config;
 mod discovery;
 mod logging;
 mod profiles;
+mod scheduler;
 mod state;
 
 use app::Application;

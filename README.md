@@ -150,3 +150,16 @@ archctl daemon run 8
 ```
 
 The daemon uses Android `dumpsys power` output to detect screen state, applies a profile only after a state transition, and ignores unknown states. It is not started by `service.sh`; launch it explicitly after verifying the desired mode. The interval must be between 2 and 300 seconds.
+
+## Phase 7
+
+Phase 7 adds scheduler capability discovery and explicit uclamp controls for common Android cgroup groups. The scanner reports `cpu.uclamp.min`, `cpu.uclamp.max`, `schedtune.boost`, and `schedtune.prefer_idle` when exposed by the device.
+
+```sh
+archctl scheduler list
+archctl scheduler set-uclamp-min top-app 128
+archctl scheduler set-uclamp-max top-app 1024
+archctl restore
+```
+
+Supported groups are `top-app`, `foreground`, `background`, `system-background`, and `restricted`. Uclamp values are limited to 0–1024. Increasing uclamp is protected by the thermal guard, and scheduler nodes are included in baseline capture and restore. `schedtune` nodes are discovery-only in this phase.

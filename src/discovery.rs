@@ -1,3 +1,4 @@
+use crate::scheduler;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,6 +14,7 @@ pub struct Capabilities {
     pub power_supplies: Vec<PowerSupply>,
     pub memory: MemoryCapabilities,
     pub block_devices: Vec<BlockDevice>,
+    pub scheduler: scheduler::SchedulerCapabilities,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +116,7 @@ pub fn scan() -> Capabilities {
         power_supplies: discover_power_supplies(),
         memory: discover_memory(),
         block_devices: discover_block_devices(),
+        scheduler: scheduler::discover(),
     }
 }
 
@@ -154,6 +157,8 @@ pub fn capture_baseline() -> BTreeMap<String, String> {
             &["scheduler", "read_ahead_kb"],
         );
     }
+
+    values.extend(scheduler::capture_baseline());
 
     values
 }
