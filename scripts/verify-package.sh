@@ -6,11 +6,11 @@ LIST="$(unzip -Z1 "${ZIP}")"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 for entry in module.prop customize.sh service.sh action.sh uninstall.sh bin/archctl \
-  webroot/index.html webroot/app.js webroot/styles.css; do
+  assets/icon.png assets/banner.png webroot/index.html webroot/app.js webroot/styles.css; do
   grep -qx "${entry}" <<<"${LIST}" || fail "missing ${entry}"
 done
 grep -q '^webroot/assets/.' <<<"${LIST}" || fail "webroot/assets is empty"
-if grep -Ev '^(module\.prop|customize\.sh|service\.sh|action\.sh|uninstall\.sh|bin/|webroot/)' <<<"${LIST}"; then
+if grep -Ev '^(module\.prop|customize\.sh|service\.sh|action\.sh|uninstall\.sh|assets/|bin/|webroot/)' <<<"${LIST}"; then
   fail "unexpected top-level entries (nested folder?)"
 fi
 for entry in bin/archctl service.sh action.sh customize.sh uninstall.sh; do
