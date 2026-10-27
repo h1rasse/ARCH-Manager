@@ -3,9 +3,10 @@ import "./styles.css";
 import * as L from "./logic.js";
 
 const { esc, base, words, nums } = L;
-const PAGES = ["Dashboard", "CPU", "GPU", "Thermal", "Scheduler", "Network", "Profiles", "Settings"];
+const PAGES = ["Dashboard", "CPU", "GPU", "Profiles", "More"];
+const DETAIL_PAGES = ["Thermal", "Scheduler", "Network", "Settings"];
 const SOURCES = {
-  Dashboard: { status: ["status", "--json"], validate: ["validate", "--json"], check: ["thermal", "check"] },
+  Dashboard: { status: ["status", "--json"], validate: ["validate", "--json"], check: ["thermal", "check"], profiles: ["profile", "list"], cpu: ["cpu", "list"], gpu: ["gpu", "list"] },
   CPU: { cpu: ["cpu", "list"], core: ["core", "list"] },
   GPU: { gpu: ["gpu", "list"] },
   Thermal: { check: ["thermal", "check"], zones: ["thermal", "list"], cooling: ["thermal", "cooling", "list"] },
@@ -14,13 +15,15 @@ const SOURCES = {
   Profiles: { profiles: ["profile", "list"], cpu: ["cpu", "list"], gpu: ["gpu", "list"] },
   Settings: { mode: ["mode", "show"], daemon: ["daemon", "status"] }
 };
-const MODE_HELP = { auto: "balanced when screen is on, stock when off", performance: "performance in both screen states", battery: "battery when on, stock when off", strict: "stock in every state" };
+const MODE_HELP = { auto: "Balanced while the screen is on, stock while off", performance: "Performance in both screen states", battery: "Battery mode while on, stock while off", strict: "Stock values in every state" };
+const NAV_ICONS = { Dashboard: "⌂", CPU: "◈", GPU: "◉", Profiles: "✦", More: "•••" };
 
 let page = "Dashboard";
 let data = {};
 let last = null;
 let mock = null;
 let chain = Promise.resolve();
+let simpleMode = localStorage.getItem("arch-simple-mode") !== "advanced";
 
 const view = document.querySelector("#view");
 const dlg = document.querySelector("#dlg");
@@ -51,7 +54,8 @@ async function load() {
   const current = page;
   data = {};
   render();
-  const entries = Object.entries(SOURCES[current]);
+  if (current === "More") return;
+  const entries = Object.entries(SOURCES[current] ?? {});
   const results = await Promise.all(entries.map(([, args]) => getJson(args)));
   if (page !== current) return;
   entries.forEach(([key], i) => (data[key] = results[i]));
@@ -71,7 +75,7 @@ function known() {
 
 function ask(title, lines, danger = false) {
   document.querySelector("#dt").textContent = title;
-  document.querySelector("#db").innerHTML = lines.filter(Boolean).map((l) => `<p>${l}</p>`).join("");
+  document.querySelector("#db").innerHTML = lines.filter(Boolean).map((line) => `<p>${line}</p>`).join("");
   const yes = document.querySelector("#yes");
   yes.className = danger ? "danger" : "";
   return new Promise((resolve) => {
@@ -86,7 +90,7 @@ async function thermalNote() {
   const t = await getJson(["thermal", "check"]);
   if (!t.ok) return { text: `Thermal check failed: ${esc(t.error.detail)}`, unsafe: true };
   const v = t.value;
-  return { text: `Thermal check: hottest ${L.fmtTemp(v.hottest_millicelsius)}, limit ${L.fmtTemp(v.limit_millicelsius)} - ${v.safe_for_performance_increase ? "safe" : "<b>UNSAFE for performance increase</b>"}`, unsafe: !v.safe_for_performance_increase };
+  return { text: `Thermal check: ${L.fmtTemp(v.hottest_millicelsius)} · limit ${L.fmtTemp(v.limit_millicelsius)} · ${v.safe_for_performance_increase ? "safe" : "<b>unsafe for performance increase</b>"}`, unsafe: !v.safe_for_performance_increase };
 }
 
 async function write(op, a, title, lines, increase = false, danger = false) {
@@ -98,123 +102,127 @@ async function write(op, a, title, lines, increase = false, danger = false) {
     return render();
   }
   const note = increase ? await thermalNote() : null;
-  const yes = await ask(title, [...lines.map(esc), note?.text, `<code>archctl ${args.join(" ")}</code>`], danger || note?.unsafe);
-  if (!yes) return render();
-  const r = await run(args);
-  last = r.errno === 0 ? { ok: true, text: r.stdout.trim(), warn: r.stderr.trim() } : { ok: false, text: L.classify(r).label, warn: L.classify(r).detail };
+  const confirmed = await ask(title, [...lines.map(esc), note?.text, `<code>archctl ${args.join(" ")}</code>`], danger || note?.unsafe);
+  if (!confirmed) return render();
+  const result = await run(args);
+  last = result.errno === 0 ? { ok: true, text: result.stdout.trim(), warn: result.stderr.trim() } : { ok: false, text: L.classify(result).label, warn: L.classify(result).detail };
   await load();
 }
 
 const badge = (text, tone = "info") => `<span class="b ${tone}">${esc(text)}</span>`;
-const kv = (rows) => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v ?? "n/a")}</dd>`).join("")}</dl>`;
+const kv = (rows) => `<dl>${rows.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value ?? "n/a")}</dd>`).join("")}</dl>`;
 const card = (title, body, right = "") => `<section class="card"><div class="row"><h3>${esc(title)}</h3>${right}</div>${body}</section>`;
-const fail = (r) => `<section class="card err"><h3>${esc(r.error.label)}</h3><pre>${esc(r.error.detail)}</pre></section>`;
+const fail = (result) => `<section class="card err"><h3>${esc(result.error.label)}</h3><details><summary>Show details</summary><pre>${esc(result.error.detail)}</pre></details></section>`;
 const empty = (text) => `<p class="muted">${esc(text)}</p>`;
 
 function block(result, fn) {
-  if (!result) return `<p class="muted">Loading...</p>`;
+  if (!result) return `<p class="muted loading">Loading...</p>`;
   return result.ok ? fn(result.value) : fail(result);
 }
 
-function pick(op, id, options, current, fmt = (v) => v, label = "") {
-  if (!options.length) return `<p class="muted">${esc(label)}: no table exposed</p>`;
+function pick(op, id, options, current, fmt = (value) => value, label = "") {
+  if (!options.length) return `<p class="muted">${esc(label)} unavailable</p>`;
   const list = options.includes(String(current)) ? options : [String(current), ...options];
-  return `<label>${esc(label)}<select data-op="${op}" data-id="${esc(id)}">${list.map((o) => `<option value="${esc(o)}"${o === String(current) ? " selected" : ""}>${esc(fmt(o))}</option>`).join("")}</select></label>`;
+  return `<label>${esc(label)}<select data-op="${op}" data-id="${esc(id)}">${list.map((option) => `<option value="${esc(option)}"${option === String(current) ? " selected" : ""}>${esc(fmt(option))}</option>`).join("")}</select></label>`;
 }
 
 function devCard(kind, item) {
   const id = base(item.path);
   const cpu = kind === "cpu";
   const fmt = cpu ? L.fmtKhz : L.fmtHz;
-  const gov = words(item.available_governors);
-  const freq = nums(item.available_frequencies).map(String);
-  const rows = cpu
-    ? [["Affected CPUs", item.affected_cpus], ["Governor", item.scaling_governor], ["Current", fmt(item.scaling_cur_freq)], ["Min / Max", `${fmt(item.scaling_min_freq)} / ${fmt(item.scaling_max_freq)}`], ["Table", freq.map(fmt).join(", ") || "n/a"]]
-    : [["Backend", item.backend], ["Governor", item.governor], ["Current", fmt(item.cur_freq)], ["Min / Max", `${fmt(item.min_freq)} / ${fmt(item.max_freq)}`], ["Governors", gov.join(", ") || "n/a"]];
-  const cur = cpu ? [item.scaling_governor, item.scaling_min_freq, item.scaling_max_freq] : [item.governor, item.min_freq, item.max_freq];
-  return card(id, kv(rows) + `<div class="ctl">${pick(`${kind}-gov`, id, gov, cur[0], (v) => v, "Governor")}${pick(`${kind}-min`, id, freq, cur[1], fmt, "Minimum")}${pick(`${kind}-max`, id, freq, cur[2], fmt, "Maximum")}</div>`, badge(cpu ? "cpufreq" : "devfreq"));
+  const governors = words(item.available_governors);
+  const frequencies = nums(item.available_frequencies).map(String);
+  const current = cpu ? [item.scaling_governor, item.scaling_min_freq, item.scaling_max_freq] : [item.governor, item.min_freq, item.max_freq];
+  const cluster = cpu ? `CPU ${item.affected_cpus ?? "policy"}` : (item.name ?? id);
+  const details = cpu
+    ? kv([["Current frequency", fmt(item.scaling_cur_freq)], ["Available governors", governors.join(", ") || "n/a"], ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Kernel path", item.path]])
+    : kv([["Backend", item.backend], ["Available governors", governors.join(", ") || "n/a"], ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Kernel path", item.path]]);
+  return `<section class="tune-card card"><div class="tune-head"><div><span class="eyebrow">${cpu ? "CPU POLICY" : "GPU DEVICE"}</span><h3>${esc(id)}</h3><p class="muted">${esc(cluster)}</p></div>${badge(cpu ? "CPU" : "GPU", "info")}</div><div class="metric-line"><strong>${esc(fmt(cpu ? item.scaling_cur_freq : item.cur_freq))}</strong><span class="muted">current frequency</span></div><div class="ctl">${pick(`${kind}-gov`, id, governors, current[0], (value) => value, "Governor")}${pick(`${kind}-min`, id, frequencies, current[1], fmt, "Minimum")}${pick(`${kind}-max`, id, frequencies, current[2], fmt, "Maximum")}</div><details class="advanced"><summary>Advanced details</summary>${details}</details></section>`;
+}
+
+function thermalBanner() {
+  const result = data.check;
+  if (!result?.ok) return result ? fail(result) : "";
+  const value = result.value;
+  const safe = value.safe_for_performance_increase;
+  return `<section class="thermal-hero ${safe ? "safe" : "unsafe"}"><div class="thermal-orb"><span>${esc(L.fmtTemp(value.hottest_millicelsius))}</span><small>${safe ? "SAFE" : "CAUTION"}</small></div><div><span class="eyebrow">THERMAL STATUS</span><h2>${safe ? "Ready for performance" : "Performance protected"}</h2><p>${safe ? "Temperature is within the safe operating range." : "Performance increases are blocked by the thermal guard."}</p></div></section>`;
+}
+
+function profileCard(profile, compact = false) {
+  const tone = { performance: "violet", balanced: "blue", battery: "green", stock: "slate", gaming: "pink" }[profile.name] ?? "blue";
+  return `<article class="profile-card ${tone}${compact ? " compact" : ""}"><div><span class="eyebrow">PROFILE</span><h3>${esc(profile.name)}</h3><p>${esc(profile.description ?? "Kernel tuning profile")}</p></div><button data-act="preview" data-id="${esc(profile.name)}">Apply</button></article>`;
 }
 
 const views = {
   Dashboard() {
-    const s = block(data.status, (v) => {
-      const d = v.device ?? {};
-      const govs = (xs, key) => [...new Set((xs ?? []).map((x) => x[key]).filter(Boolean))].join(", ") || "n/a";
-      return card("System", kv([["Kernel", d.kernel_release], ["Machine", d.machine ?? d.soc_id], ["Android", d.android_version], ["CPU policies", v.cpu_policies?.length ?? 0], ["CPU cores", v.cores?.length ?? 0], ["GPU / Devfreq", v.devfreq_devices?.length ?? 0], ["Thermal zones", v.thermal_zones?.length ?? 0], ["Network interfaces", v.network?.interfaces?.length ?? 0], ["CPU governor", govs(v.cpu_policies, "scaling_governor")], ["GPU governor", govs(v.devfreq_devices, "governor")], ["TCP congestion", v.network?.tcp?.current], ["Snapshot", v.generated_at ? new Date(v.generated_at * 1000).toLocaleString() : "n/a"]]));
+    const status = block(data.status, (value) => {
+      const device = value.device ?? {};
+      const cpu = value.cpu_policies ?? [];
+      const gpu = value.devfreq_devices ?? [];
+      const cpuSummary = cpu.map((item) => `<div class="summary-row"><span>${esc(base(item.path))}</span><strong>${esc(L.fmtKhz(item.scaling_cur_freq))}</strong><small>${esc(item.scaling_governor ?? "n/a")}</small></div>`).join("");
+      const gpuSummary = gpu.map((item) => `<div class="summary-row"><span>${esc(item.name ?? base(item.path))}</span><strong>${esc(L.fmtHz(item.cur_freq))}</strong><small>${esc(item.governor ?? "n/a")}</small></div>`).join("");
+      return `<div class="welcome"><div><span class="eyebrow">PERFORMANCE CONSOLE</span><h2>Good to see you</h2><p>${esc(device.machine ?? device.soc_id ?? "Device ready")} · ${esc(device.android_version ?? "Android")}</p></div><span class="live-dot">LIVE</span></div><div class="summary-grid"><section class="card summary-card"><div class="section-title"><span>CPU</span>${badge(`${cpu.length} policies`, "info")}</div>${cpuSummary || empty("No CPU policy")}</section><section class="card summary-card"><div class="section-title"><span>GPU</span>${badge(`${gpu.length} devices`, "info")}</div>${gpuSummary || empty("No GPU device")}</section></div>`;
     });
-    const v = block(data.validate, (r) => card("Validation", `<ul class="checks">${r.checks.map((c) => `<li>${badge(c.status, { pass: "ok", warn: "warn", fail: "bad" }[c.status] ?? "info")} <b>${esc(c.name)}</b> <span class="muted">${esc(c.detail)}</span></li>`).join("")}</ul>`, badge(r.passed ? "passed" : "failed", r.passed ? "ok" : "bad")));
-    const hint = data.status && !data.status.ok ? card("No snapshot yet", `<p>Run a capability scan to create the status snapshot.</p><button data-act="scan">Run scan</button>`) : "";
-    return thermalBanner() + s + hint + v;
+    const profiles = block(data.profiles, (list) => `<div class="section-title"><h2>Quick profiles</h2><button class="text-button" data-page="Profiles">View all</button></div><div class="profile-stack">${list.slice(0, 3).map((profile) => profileCard(profile, true)).join("")}</div>`);
+    const validation = block(data.validate, (report) => `<div class="status-strip ${report.passed ? "ok" : "bad"}"><span>${report.passed ? "✓" : "!"}</span><div><strong>${report.passed ? "System ready" : "Validation needs attention"}</strong><small>${report.checks?.filter((check) => check.status === "pass").length ?? 0} checks passed</small></div></div>`);
+    return thermalBanner() + status + profiles + validation;
   },
   CPU() {
-    const cpu = block(data.cpu, (v) => (v.length ? v.map((p) => devCard("cpu", p)).join("") : empty("No CPU policies found.")));
+    const cpu = block(data.cpu, (value) => value.length ? value.map((item) => devCard("cpu", item)).join("") : empty("No CPU policies found."));
     const core = block(data.core, (cores) => {
-      const online = cores.filter((c) => c.online).length;
-      const items = [...cores].sort((a, b) => a.cpu - b.cpu).map((c) => {
-        const can = c.writable && c.online_node;
-        const off = can && c.cpu !== 0 && c.online && online > 1;
-        const on = can && !c.online;
-        return `<div class="core"><b>CPU${c.cpu}</b>${badge(c.online ? "online" : "offline", c.online ? "ok" : "warn")}${off ? `<button class="ghost" data-act="core-offline" data-id="cpu${c.cpu}">Offline</button>` : ""}${on ? `<button class="ghost" data-act="core-online" data-id="cpu${c.cpu}">Online</button>` : ""}</div>`;
+      const online = cores.filter((coreItem) => coreItem.online).length;
+      const rows = [...cores].sort((a, b) => a.cpu - b.cpu).map((coreItem) => {
+        const can = coreItem.writable && coreItem.online_node;
+        const off = can && coreItem.cpu !== 0 && coreItem.online && online > 1;
+        const on = can && !coreItem.online;
+        return `<div class="core"><b>CPU${coreItem.cpu}</b>${badge(coreItem.online ? "online" : "offline", coreItem.online ? "ok" : "warn")}${off ? `<button class="ghost" data-act="core-offline" data-id="cpu${coreItem.cpu}">Offline</button>` : ""}${on ? `<button class="ghost" data-act="core-online" data-id="cpu${coreItem.cpu}">Online</button>` : ""}</div>`;
       });
-      return card("Core control", items.join("") || empty("No cores reported."));
+      return simpleMode ? `<details class="advanced card"><summary>Core control</summary>${rows.join("") || empty("No cores reported.")}</details>` : card("Core control", rows.join("") || empty("No cores reported."));
     });
-    return cpu + core;
+    return `<div class="page-intro"><span class="eyebrow">PROCESSOR</span><h2>CPU control</h2><p>Tune each performance policy with safe frequency tables.</p></div>${cpu}${core}`;
   },
-  GPU: () => block(data.gpu, (v) => (v.length ? v.map((d) => devCard("gpu", d)).join("") : empty("No Devfreq devices found."))),
+  GPU: () => `<div class="page-intro"><span class="eyebrow">GRAPHICS</span><h2>GPU control</h2><p>Manage graphics frequency and governor targets.</p></div>${block(data.gpu, (value) => value.length ? value.map((item) => devCard("gpu", item)).join("") : empty("No Devfreq devices found."))}`,
+  Profiles: () => `<div class="page-intro"><span class="eyebrow">TUNING</span><h2>Performance profiles</h2><p>Choose a safe preset for the way you use your device.</p></div>${block(data.profiles, (list) => (list.map((profile) => profileCard(profile)).join("") || empty("No profiles available.")) + `<section class="card restore-card"><div><span class="eyebrow">SAFETY NET</span><h3>Restore baseline</h3><p>Return captured kernel values to their original state.</p></div><button class="danger" data-act="restore">Restore</button></section>`)}`,
   Thermal() {
-    const zones = block(data.zones, (v) => (v.length ? v.map((z) => card(z.zone_type || base(z.path), kv([["Zone", base(z.path)], ["Temperature", L.fmtTemp(z.temperature_millicelsius)], ["Critical trip", L.fmtTemp(z.critical_trip_millicelsius)]]))).join("") : empty("No thermal zones found.")));
-    const cool = block(data.cooling, (v) => (v.length ? v.map((c) => {
-      const states = [];
-      for (let s = (c.current_state ?? 0) + 1; s <= (c.max_state ?? 0); s++) states.push(String(s));
-      const id = base(c.path);
-      return card(id, kv([["Type", c.device_type], ["Current / Max", `${c.current_state ?? "n/a"} / ${c.max_state ?? "n/a"}`]]) + (c.writable?.length && states.length ? pick("cooling", id, states, states[0], (x) => `State ${x}`, "Boost to") + `<button data-act="cooling" data-id="${esc(id)}">Boost cooling</button>` : `<p class="muted">No higher state available or not writable.</p>`));
-    }).join("") : empty("No cooling devices found.")));
-    return thermalBanner() + zones + `<h2>Cooling devices</h2>` + cool;
+    const zones = block(data.zones, (value) => value.length ? value.map((zone) => `<details class="card advanced"><summary>${esc(zone.zone_type || base(zone.path))}<span>${esc(L.fmtTemp(zone.temperature_millicelsius))}</span></summary>${kv([["Zone", base(zone.path)], ["Temperature", L.fmtTemp(zone.temperature_millicelsius)], ["Critical trip", L.fmtTemp(zone.critical_trip_millicelsius)]])}</details>`).join("") : empty("No thermal zones found."));
+    const cooling = block(data.cooling, (value) => value.length ? value.map((item) => card(base(item.path), kv([["Type", item.device_type], ["Current / max", `${item.current_state ?? "n/a"} / ${item.max_state ?? "n/a"}`]]) + `<p class="muted">${item.writable?.length ? "Cooling boost is available." : "Read-only cooling device."}</p>`)).join("") : empty("No cooling devices found."));
+    return `<div class="page-intro"><span class="eyebrow">PROTECTION</span><h2>Thermal management</h2><p>Temperature protection is always active before performance increases.</p></div>${thermalBanner()}${zones}<h2 class="subheading">Cooling devices</h2>${cooling}`;
   },
-  Scheduler: () => block(data.sched, (v) => {
-    const map = new Map();
-    for (const n of v.uclamp ?? []) {
-      const key = `${n.group}/${n.attribute}`;
-      if (!map.has(key) || (n.writable && !map.get(key).writable)) map.set(key, n);
-    }
-    const out = L.GROUPS.map((g) => {
-      const min = map.get(`${g}/cpu.uclamp.min`);
-      const max = map.get(`${g}/cpu.uclamp.max`);
-      if (!min && !max) return "";
-      const field = (n, op) => (n ? `<label>${op === "uclamp-min" ? "uclamp min" : "uclamp max"} (${esc(n.value)})<input type="number" inputmode="numeric" min="0" max="1024" step="1" value="${esc(n.value)}" data-op="${op}" data-id="${g}" ${n.writable ? "" : "disabled"}></label>${n.writable ? `<button data-act="uclamp" data-op="${op}" data-id="${g}">Apply</button>` : badge("read-only", "warn")}` : "");
-      return card(g, `<div class="ctl">${field(min, "uclamp-min")}${field(max, "uclamp-max")}</div>`);
-    }).join("");
-    return (out || empty("No uclamp interface exposed.")) + `<p class="muted">schedtune nodes: ${(v.schedtune ?? []).length} (discovery only)</p>`;
-  }),
+  Scheduler: () => block(data.sched, (value) => `<div class="page-intro"><span class="eyebrow">SYSTEM</span><h2>Scheduler</h2><p>Adjust uclamp limits for supported task groups.</p></div>${L.GROUPS.map((group) => { const nodes = (value.uclamp ?? []).filter((item) => item.group === group); return nodes.length ? card(group, nodes.map((node) => `<label>${esc(node.attribute)}<input type="number" min="0" max="1024" value="${esc(node.value)}" data-op="${node.attribute.endsWith("min") ? "uclamp-min" : "uclamp-max"}" data-id="${group}" ${node.writable ? "" : "disabled"}></label><button data-act="uclamp" data-op="${node.attribute.endsWith("min") ? "uclamp-min" : "uclamp-max"}" data-id="${group}">Apply</button>`).join("")) : ""}).join("") || empty("No uclamp interface exposed.")}`),
   Network() {
-    const ifs = block(data.net, (v) => (v.length ? v.map((n) => card(n.name, kv([["State", n.operstate], ["Carrier", n.carrier], ["MTU", n.mtu], ["Speed", n.speed], ["Duplex", n.duplex], ["MAC", n.address], ["TX queue", n.tx_queue_len]]), badge(n.operstate ?? "unknown", n.operstate === "up" ? "ok" : "info"))).join("") : empty("No interfaces found.")));
-    const tcp = block(data.tcp, (t) => card("TCP congestion", kv([["Current", t.current], ["Available", t.available], ["Allowed", t.allowed]]) + (t.writable ? pick("tcp", "tcp", words(t.available), t.current, (v) => v, "Algorithm") : badge("read-only", "warn"))));
-    return tcp + ifs;
+    const tcp = block(data.tcp, (value) => card("TCP congestion", kv([["Current", value.current], ["Allowed", value.allowed]]) + (value.writable ? pick("tcp", "tcp", words(value.available), value.current, (item) => item, "Algorithm") : badge("read-only", "warn"))));
+    const network = block(data.net, (value) => {
+      if (simpleMode) return empty(`${value.length} network interface${value.length === 1 ? "" : "s"} detected.`);
+      return value.map((item) => card(item.name, kv([["State", item.operstate], ["Carrier", item.carrier], ["MTU", item.mtu], ["Speed", item.speed], ["Duplex", item.duplex], ["MAC", item.address], ["TX queue", item.tx_queue_len]]))).join("");
+    });
+    return `<div class="page-intro"><span class="eyebrow">CONNECTIVITY</span><h2>Network</h2><p>Inspect TCP behavior and interface state.</p></div>${tcp}${network}`;
   },
-  Profiles: () => block(data.profiles, (list) => {
-    const body = list.map((p) => card(p.name, `<p>${esc(p.description)}</p><button data-act="preview" data-id="${esc(p.name)}">Preview and apply</button>`, badge(["stock", "balanced", "battery", "performance", "gaming"].includes(p.name) ? "built-in" : "custom"))).join("");
-    return (body || empty("No profiles.")) + card("Restore", `<p>Restore all values captured in the baseline.</p><button class="danger" data-act="restore">Restore baseline</button>`);
-  }),
   Settings() {
-    const mode = block(data.mode, (m) => card("Adaptive mode", kv([["Current", m.mode], ["Screen", m.screen_state], ["Behavior", MODE_HELP[m.mode]]]) + pick("mode", "mode", L.MODES, m.mode, (v) => v, "Mode") + `<p class="muted">${L.MODES.map((x) => `${x}: ${MODE_HELP[x]}`).map(esc).join("<br>")}</p>`));
-    const daemon = block(data.daemon, (d) => card("Adaptive daemon", kv([["State", d.running ? "lock present (running)" : "not running"], ["Interval", `${d.interval_seconds}s`]]) + `<p class="muted">The daemon runs in the foreground and is not started from the WebUI. Start it from a root shell: <code>archctl daemon run 8</code>. The state is inferred from a lock file and can be stale after a crash.</p>`));
-    return mode + daemon + card("Maintenance", `<div class="ctl"><button data-act="scan">Run scan</button><button data-act="capture">Capture baseline</button></div>`) + card("About", kv([["Mode", mock ? "MOCK (development)" : "Device"], ["Binary", L.BIN]]));
+    const mode = block(data.mode, (value) => card("Adaptive mode", kv([["Current", value.mode], ["Screen", value.screen_state], ["Behavior", MODE_HELP[value.mode]]]) + pick("mode", "mode", L.MODES, value.mode, (item) => item, "Mode")));
+    const daemon = block(data.daemon, (value) => card("Adaptive daemon", kv([["State", value.running ? "Running" : "Not running"], ["Interval", `${value.interval_seconds}s`]]) + `<p class="muted">Start the foreground daemon from a root shell when needed.</p>`));
+    return `<div class="page-intro"><span class="eyebrow">PREFERENCES</span><h2>Settings</h2><p>Control interface behavior and adaptive mode.</p></div>${card("Interface", `<div class="setting-row"><div><strong>${simpleMode ? "Simple mode" : "Advanced mode"}</strong><p class="muted">${simpleMode ? "Focused controls and essential status." : "All diagnostics and kernel details."}</p></div><button class="ghost" data-act="toggle-mode">Use ${simpleMode ? "Advanced" : "Simple"}</button></div>`)}${mode}${daemon}${card("Maintenance", `<div class="ctl"><button data-act="scan">Run scan</button><button data-act="capture">Capture baseline</button></div><p class="muted">Binary: ${esc(L.BIN)}</p>`)}`;
   }
 };
 
-function thermalBanner() {
-  const t = data.check;
-  if (!t?.ok) return t ? fail(t) : "";
-  const v = t.value;
-  return v.safe_for_performance_increase
-    ? `<div class="banner ok">Thermal safe: hottest ${L.fmtTemp(v.hottest_millicelsius)} (limit ${L.fmtTemp(v.limit_millicelsius)})</div>`
-    : `<div class="banner bad">Thermal warning: hottest ${L.fmtTemp(v.hottest_millicelsius)} reached limit ${L.fmtTemp(v.limit_millicelsius)}. Performance increases are blocked.</div>`;
+function renderMore() {
+  const items = [
+    ["Thermal", "Temperature protection and cooling devices", "◌"],
+    ["Scheduler", "Uclamp task priority controls", "⌁"],
+    ["Network", "TCP congestion and interfaces", "⌁"],
+    ["Settings", "Adaptive mode and interface preferences", "⚙"]
+  ];
+  return `<div class="page-intro"><span class="eyebrow">ARCH MANAGER</span><h2>More controls</h2><p>Advanced tools are grouped here to keep the main dashboard focused.</p></div><div class="more-grid">${items.map(([name, description, icon]) => `<button class="more-card" data-page="${name}"><span class="more-icon">${icon}</span><span><strong>${name}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</div>${card("Interface mode", `<div class="setting-row"><div><strong>${simpleMode ? "Simple mode" : "Advanced mode"}</strong><p class="muted">Switch between focused controls and full diagnostics.</p></div><button class="ghost" data-act="toggle-mode">Use ${simpleMode ? "Advanced" : "Simple"}</button></div>`)}`;
+}
+
+function renderNav() {
+  document.querySelector("#nav").innerHTML = PAGES.map((item) => `<button class="nav-item ${item === page ? "on" : ""}" data-page="${item}" ${item === page ? 'aria-current="page"' : ""}><span class="nav-icon">${NAV_ICONS[item]}</span><span>${item === "Dashboard" ? "Home" : item}</span></button>`).join("");
 }
 
 function render() {
-  const result = last ? `<div class="banner ${last.ok ? "ok" : "bad"}"><b>${last.ok ? "Done" : "Failed"}</b><pre>${esc([last.text, last.warn].filter(Boolean).join("\n"))}</pre><button class="ghost" data-act="dismiss">Dismiss</button></div>` : "";
-  view.innerHTML = result + views[page]();
-  document.querySelector("#nav").innerHTML = PAGES.map((p) => `<button class="${p === page ? "on" : ""}" data-page="${p}" ${p === page ? 'aria-current="page"' : ""}>${p}</button>`).join("");
+  const result = last ? `<div class="toast ${last.ok ? "ok" : "bad"}"><strong>${last.ok ? "Done" : "Unable to update"}</strong><span>${esc(last.text ?? "")}</span><button class="ghost" data-act="dismiss">×</button></div>` : "";
+  view.innerHTML = result + (page === "More" ? renderMore() : views[page]());
+  renderNav();
+  document.querySelector("#page-label").textContent = page === "Dashboard" ? "Performance Console" : page;
 }
 
 async function preview(name) {
@@ -225,25 +233,24 @@ async function preview(name) {
     last = { ok: false, text: error.message };
     return render();
   }
-  const r = await run(args);
-  if (r.errno !== 0) {
-    last = { ok: false, text: L.classify(r).label, warn: L.classify(r).detail };
+  const result = await run(args);
+  if (result.errno !== 0) {
+    last = { ok: false, text: L.classify(result).label, warn: L.classify(result).detail };
     return render();
   }
-  const dry = L.parseDryRun(r.stdout, r.stderr);
+  const dry = L.parseDryRun(result.stdout, result.stderr);
   const cpu = data.cpu?.ok ? data.cpu.value : [];
   const gpu = data.gpu?.ok ? data.gpu.value : [];
   let raises = false;
-  const rows = dry.changes.map((c) => {
-    const cur = L.currentValue(c, cpu, gpu);
-    const up = L.raisesPerformance(c, cur.old);
+  const rows = dry.changes.map((change) => {
+    const current = L.currentValue(change, cpu, gpu);
+    const up = L.raisesPerformance(change, current.old);
     raises ||= up;
-    return `<tr><td>${esc(cur.node || `${c.kind} ${c.name}`)}</td><td>${esc(cur.old ?? "n/a")}</td><td>${esc(c.value)}</td></tr>`;
+    return `<tr><td>${esc(current.node || `${change.kind} ${change.name}`)}</td><td>${esc(current.old ?? "n/a")}</td><td>${esc(change.value)}</td></tr>`;
   });
   const table = rows.length ? `<table><tr><th>Node</th><th>Old</th><th>New</th></tr>${rows.join("")}</table>` : esc(dry.restore ? "Restores the captured baseline." : "No changes planned.");
-  const skipped = dry.skipped.length ? `<pre>${esc(dry.skipped.join("\n"))}</pre>` : "";
   const note = raises ? await thermalNote() : null;
-  if (!(await ask(`Apply ${name}?`, [table, skipped, note?.text], raises && note?.unsafe))) return;
+  if (!(await ask(`Apply ${name}?`, [table, note?.text], raises && note?.unsafe))) return;
   let applyArgs;
   try {
     applyArgs = L.writeArgs("profile", { value: name }, known());
@@ -258,52 +265,57 @@ async function preview(name) {
 
 async function simple(args, title, text, danger = false) {
   if (!(await ask(title, [esc(text), `<code>archctl ${args.join(" ")}</code>`], danger))) return;
-  const r = await run(args);
-  last = r.errno === 0 ? { ok: true, text: r.stdout.trim(), warn: r.stderr.trim() } : { ok: false, text: L.classify(r).label, warn: L.classify(r).detail };
+  const result = await run(args);
+  last = result.errno === 0 ? { ok: true, text: result.stdout.trim(), warn: result.stderr.trim() } : { ok: false, text: L.classify(result).label, warn: L.classify(result).detail };
   await load();
 }
 
-const PERF = (op, value, el) => {
-  const item = op.startsWith("cpu") ? data.cpu?.value?.find((p) => base(p.path) === el.dataset.id) : data.gpu?.value?.find((d) => base(d.path) === el.dataset.id);
+const PERF = (op, value, element) => {
+  const item = op.startsWith("cpu") ? data.cpu?.value?.find((policy) => base(policy.path) === element.dataset.id) : data.gpu?.value?.find((device) => base(device.path) === element.dataset.id);
   if (!item) return false;
   if (op.endsWith("gov")) return /performance/i.test(value);
-  const cur = op.endsWith("min") ? (item.scaling_min_freq ?? item.min_freq) : (item.scaling_max_freq ?? item.max_freq);
-  return Number(value) > Number(cur);
+  const current = op.endsWith("min") ? (item.scaling_min_freq ?? item.min_freq) : (item.scaling_max_freq ?? item.max_freq);
+  return Number(value) > Number(current);
 };
 
 document.addEventListener("change", (event) => {
-  const el = event.target;
-  const op = el.dataset?.op;
-  if (!op || el.tagName !== "SELECT") return;
-  const id = el.dataset.id;
-  const value = el.value;
-  if (/^(cpu|gpu)-/.test(op)) return write(op, { id, value }, `Change ${id}`, [`${op} -> ${value}`], PERF(op, value, el));
+  const element = event.target;
+  const op = element.dataset?.op;
+  if (!op || element.tagName !== "SELECT") return;
+  const id = element.dataset.id;
+  const value = element.value;
+  if (/^(cpu|gpu)-/.test(op)) return write(op, { id, value }, `Change ${id}`, [`${op} → ${value}`], PERF(op, value, element));
   if (op === "cooling") return;
-  if (op === "tcp") return write(op, { value }, "Change TCP congestion", [`Algorithm -> ${value}`]);
-  if (op === "mode") return write(op, { value }, "Change adaptive mode", [`Mode -> ${value}`, MODE_HELP[value]]);
+  if (op === "tcp") return write(op, { value }, "Change TCP congestion", [`Algorithm → ${value}`]);
+  if (op === "mode") return write(op, { value }, "Change adaptive mode", [`Mode → ${value}`, MODE_HELP[value]]);
 });
 
 document.addEventListener("click", (event) => {
-  const el = event.target.closest("button");
-  if (!el) return;
-  if (el.dataset.page) {
-    page = el.dataset.page;
+  const element = event.target.closest("button");
+  if (!element) return;
+  if (element.dataset.page) {
+    page = element.dataset.page;
     last = null;
     return load();
   }
-  if (el.id === "reload") return load();
-  const act = el.dataset.act;
-  const id = el.dataset.id;
-  const field = () => view.querySelector(`[data-op="${el.dataset.op ?? "cooling"}"][data-id="${id}"]`);
-  if (act === "dismiss") { last = null; return render(); }
-  if (act === "preview") return preview(id);
-  if (act === "scan") return simple(["scan"], "Run capability scan?", "Rewrites the capability snapshot in the ARCH Manager state directory. No kernel value is changed.");
-  if (act === "capture") return simple(["capture"], "Capture baseline?", "Overwrites the stored baseline with the current kernel values.", true);
-  if (act === "restore") return simple(["restore"], "Restore baseline?", "Writes every value stored in the baseline back to the kernel.", true);
-  if (act === "core-offline") return write("core-offline", { id }, `Take ${id} offline?`, ["Reduces available CPU capacity. The backend refuses CPU0 and the last online core."], false, true);
-  if (act === "core-online") return write("core-online", { id }, `Bring ${id} online?`, ["Increases CPU capacity."], true);
-  if (act === "cooling") return write("cooling", { id, value: field()?.value }, `Boost cooling on ${id}?`, [`Raises the cooling state to ${field()?.value}. Cooling can only be increased from here.`]);
-  if (act === "uclamp") return write(el.dataset.op, { id, value: field()?.value }, `Change ${id} uclamp`, [`${el.dataset.op} -> ${field()?.value}`], el.dataset.op === "uclamp-min");
+  if (element.id === "reload") return load();
+  const action = element.dataset.act;
+  const id = element.dataset.id;
+  const field = () => view.querySelector(`[data-op="${element.dataset.op ?? "cooling"}"][data-id="${id}"]`);
+  if (action === "dismiss") { last = null; return render(); }
+  if (action === "toggle-mode") {
+    simpleMode = !simpleMode;
+    localStorage.setItem("arch-simple-mode", simpleMode ? "simple" : "advanced");
+    return render();
+  }
+  if (action === "preview") return preview(id);
+  if (action === "scan") return simple(["scan"], "Run capability scan?", "Refreshes the capability snapshot without changing kernel values.");
+  if (action === "capture") return simple(["capture"], "Capture baseline?", "Overwrites the stored baseline with current kernel values.", true);
+  if (action === "restore") return simple(["restore"], "Restore baseline?", "Writes captured values back to the kernel.", true);
+  if (action === "core-offline") return write("core-offline", { id }, `Take ${id} offline?`, ["Reduces available CPU capacity. CPU0 and the last online core are protected."], false, true);
+  if (action === "core-online") return write("core-online", { id }, `Bring ${id} online?`, ["Increases CPU capacity."], true);
+  if (action === "cooling") return write("cooling", { id, value: field()?.value }, `Boost cooling on ${id}?`, [`Raises cooling state to ${field()?.value}.`]);
+  if (action === "uclamp") return write(element.dataset.op, { id, value: field()?.value }, `Change ${id} uclamp`, [`${element.dataset.op} → ${field()?.value}`], element.dataset.op === "uclamp-min");
 });
 
 async function boot() {
