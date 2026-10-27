@@ -1,3 +1,5 @@
+import { activeGpuDevices } from "./logic.js";
+
 /* ── KernelSU bridge ─────────────────────────────────────────────────── */
 let _cbId = 0;
 function _exec(cmd, opts) {
@@ -389,7 +391,7 @@ const VIEWS = {
     const hero = block(data.status, v => {
       const dev = v.device ?? {};
       const cpuPolicies = v.cpu_policies ?? [];
-      const gpus = v.devfreq_devices ?? [];
+      const gpus = activeGpuDevices(v.devfreq_devices ?? []);
       const cpuRows = cpuPolicies.map(p =>
         `<div class="stat-row"><span class="stat-label">${esc(cpuLabel(p))} · <span class="stat-detail">${esc(cpuCores(p))}</span></span><div style="text-align:right"><span class="stat-val">${esc(fmtKhz(p.scaling_cur_freq))}</span><div class="stat-detail">gov <b>${esc(p.scaling_governor??"n/a")}</b></div></div></div>`
       ).join("");
@@ -408,8 +410,8 @@ const VIEWS = {
           ${cpuRows || `<p class="muted">No CPU data</p>`}
         </section>
         <section class="card">
-          <div class="card-head"><span class="card-title">${SVG.gauge()}GPU</span>${badge(`${gpus.length} ${gpus.length===1?"device":"devices"}`)}</div>
-          ${gpuRows || `<p class="muted">No GPU data</p>`}
+          <div class="card-head"><span class="card-title">${SVG.gauge()}GPU</span>${badge(`${gpus.length} active ${gpus.length===1?"GPU":"GPUs"}`)}</div>
+          ${gpuRows || `<p class="muted">No active GPU detected (current frequency is 0 MHz).</p>`}
         </section>
       </div>`;
     });
@@ -471,9 +473,10 @@ const VIEWS = {
   },
 
   GPU() {
-    const devCards = block(data.gpu, v =>
-      v.length ? v.map((g,i)=>devCard("gpu",g,i,v.length)).join("") : `<p class="muted">No GPU devices found.</p>`
-    );
+    const devCards = block(data.gpu, v => {
+      const gpus = activeGpuDevices(v);
+      return gpus.length ? gpus.map((g,i)=>devCard("gpu",g,i,gpus.length)).join("") : `<p class="muted">No active GPU detected (current frequency is 0 MHz).</p>`;
+    });
     return `<div class="page-top"><div class="page-eyebrow">GRAPHICS</div><h2 class="page-h">GPU</h2></div>${devCards}`;
   },
 

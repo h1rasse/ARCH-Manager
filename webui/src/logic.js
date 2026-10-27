@@ -32,6 +32,17 @@ export function gpuBackendLabel(backend) {
   return ({ "qualcomm-kgsl": "Qualcomm Adreno", "mali-devfreq": "ARM Mali", "mediatek-vendor": "MediaTek" })[backend] ?? "Graphics processor";
 }
 
+export function activeGpuDevices(devices) {
+  const knownBackends = new Set(["qualcomm-kgsl", "mali-devfreq", "mediatek-vendor"]);
+  const gpuIdentity = /(?:gpu\d*|graphics|mali|kgsl|ged|gpufreq|adreno|panfrost)/i;
+  return (Array.isArray(devices) ? devices : []).filter((device) => {
+    const identity = `${device?.path ?? ""} ${device?.name ?? ""}`;
+    const isGpu = knownBackends.has(device?.backend) || gpuIdentity.test(identity);
+    const frequency = Number(device?.cur_freq);
+    return isGpu && Number.isFinite(frequency) && frequency > 0;
+  });
+}
+
 export const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 

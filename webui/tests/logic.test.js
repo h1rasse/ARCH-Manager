@@ -14,6 +14,20 @@ test("friendly device labels hide raw policy and vendor node names", () => {
   assert.equal(L.gpuBackendLabel("unknown"), "Graphics processor");
 });
 
+test("activeGpuDevices keeps recognized GPUs above zero MHz only", () => {
+  const active = { path: "/sys/class/devfreq/kgsl-3d0", backend: "qualcomm-kgsl", cur_freq: "587000000" };
+  const genericGpu = { path: "/sys/class/devfreq/gpu0", backend: "generic-devfreq", cur_freq: "150000000" };
+  const devices = [
+    active,
+    { path: "/sys/class/devfreq/kgsl-3d1", backend: "qualcomm-kgsl", cur_freq: "0" },
+    genericGpu,
+    { path: "/sys/class/devfreq/soc-l3", backend: "generic-devfreq", cur_freq: "800000000" },
+    { path: "/sys/class/devfreq/mali0", backend: "mali-devfreq", cur_freq: null }
+  ];
+  assert.deepEqual(L.activeGpuDevices(devices), [active, genericGpu]);
+  assert.deepEqual(L.activeGpuDevices(null), []);
+});
+
 test("buildCommand quotes and rejects unsafe arguments", () => {
   assert.equal(L.buildCommand(["cpu", "list"]), `${L.BIN} 'cpu' 'list'`);
   assert.throws(() => L.buildCommand(["cpu", "list; rm -rf /"]));
