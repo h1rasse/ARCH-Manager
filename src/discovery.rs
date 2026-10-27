@@ -66,7 +66,9 @@ pub struct ThermalZone {
     pub path: String,
     pub zone_type: Option<String>,
     pub temperature: Option<String>,
+    pub temperature_millicelsius: Option<i64>,
     pub trip_points: Vec<String>,
+    pub critical_trip_millicelsius: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,17 +293,22 @@ fn discover_thermal_zones() -> Vec<ThermalZone> {
             path.file_name()
                 .is_some_and(|name| name.to_string_lossy().starts_with("thermal_zone"))
         })
-        .map(|path| ThermalZone {
-            path: path.display().to_string(),
-            zone_type: read_value(&path.join("type")),
-            temperature: read_value(&path.join("temp")),
-            trip_points: entries(&path)
+        .map(|path| {
+            let trip_points = entries(&path)
                 .into_iter()
                 .filter_map(|entry| {
                     let name = entry.file_name()?.to_string_lossy().to_string();
                     name.starts_with("trip_point_").then(|| name)
                 })
-                .collect(),
+                .collect::<Vec<_>>();
+            ThermalZone {
+                path: path.display().to_string(),
+                zone_type: read_value(&path.join("type")),
+                temperature: read_value(&path.join("temp")),
+                temperature_millicelsius: read_i64(&path.join("temp")),
+                critical_trip_millicelsius: critical_trip(&path, &trip_points),
+                trip_points,
+            }
         })
         .collect()
 }
@@ -396,6 +403,26 @@ fn read_value(path: &Path) -> Option<String> {
     fs::read_to_string(path)
         .ok()
         .map(|value| value.trim().to_string())
+}
+
+fn read_i64(path: &Path) -> Option<i64> {
+    read_value(path)?.parse().ok()
+}
+
+fn critical_trip(path: &Path, trip_points: &[String]) -> Option<i64> {
+    trip_points
+        .iter()
+        .filter(|name| name.ends_with("_type"))
+        .filter_map(|name| {
+            let kind = read_value(&path.join(name))?;
+            if kind.eq_ignore_ascii_case("critical") {
+                let prefix = name.trim_end_matches("_type");
+                read_i64(&path.join(format!("{prefix}_temp")))
+            } else {
+                None
+            }
+        })
+        .max()
 }
 
 fn read_value_first(path: &Path, names: &[&str]) -> Option<String> {

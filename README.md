@@ -84,3 +84,20 @@ archctl restore
 ```
 
 GPU frequency writes are accepted only when the frequency exists in `available_frequencies`, when the target node is writable, and when the new minimum and maximum remain consistent. No GPU setting is applied automatically during boot.
+
+## Phase 4
+
+Phase 4 adds thermal safety monitoring and a performance-increase guard. Thermal zones expose numeric millidegree Celsius values, trip point names, and detected critical trip thresholds.
+
+```sh
+archctl thermal list
+archctl thermal check
+```
+
+The default performance-increase threshold is `55000` millidegree Celsius. It can be overridden for testing or device-specific policy:
+
+```sh
+ARCH_MANAGER_THERMAL_LIMIT_MC=52000 archctl thermal check
+```
+
+CPU and GPU operations that increase a frequency limit or select a performance governor are rejected when the hottest readable thermal zone reaches the threshold. Operations that reduce limits and `restore` remain available. The guard is evaluated only during explicit CLI writes and does not start a boot daemon or modify thermal trip points.

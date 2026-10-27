@@ -26,6 +26,8 @@ impl Application {
             [command] if command == "restore" => self.restore(),
             [command, action] if command == "cpu" && action == "list" => self.cpu_list(),
             [command, action] if command == "gpu" && action == "list" => self.gpu_list(),
+            [command, action] if command == "thermal" && action == "list" => self.thermal_list(),
+            [command, action] if command == "thermal" && action == "check" => self.thermal_check(),
             [command, action, policy, value] if command == "cpu" && action == "set-governor" => {
                 self.set_cpu_governor(policy, value)
             }
@@ -127,12 +129,47 @@ impl Application {
         Ok(())
     }
 
+    fn thermal_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.thermal_zones)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn thermal_check(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        let hottest = capabilities
+            .thermal_zones
+            .iter()
+            .filter_map(|zone| zone.temperature_millicelsius)
+            .max();
+        let limit = thermal_limit_millicelsius();
+        let safe = hottest.map(|value| value < limit).unwrap_or(true);
+        let report = serde_json::json!({
+            "hottest_millicelsius": hottest,
+            "limit_millicelsius": limit,
+            "safe_for_performance_increase": safe,
+            "thermal_zones": capabilities.thermal_zones,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
     fn set_cpu_governor(&self, policy: &str, governor: &str) -> Result<(), String> {
         let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
         let policy_path = resolve_policy_path(policy)?;
         let available = read_required(&policy_path.join("scaling_available_governors"))?;
         if !available.split_whitespace().any(|item| item == governor) {
             return Err(format!("governor is not available: {governor}"));
+        }
+        if is_performance_governor(governor) {
+            ensure_thermal_safe_for_increase()?;
         }
         let target = policy_path.join("scaling_governor");
         ensure_writable(&target)?;
@@ -178,12 +215,26 @@ impl Application {
                     ));
                 }
             }
+            if current_min
+                .map(|minimum| requested > minimum)
+                .unwrap_or(true)
+            {
+                ensure_thermal_safe_for_increase()?;
+            }
         } else if let Some(minimum) = current_min {
             if requested < minimum {
                 return Err(format!(
                     "maximum frequency is below current minimum: {requested} < {minimum}"
                 ));
             }
+            if current_max
+                .map(|maximum| requested > maximum)
+                .unwrap_or(true)
+            {
+                ensure_thermal_safe_for_increase()?;
+            }
+        } else {
+            ensure_thermal_safe_for_increase()?;
         }
         let target = policy_path.join(attribute);
         ensure_writable(&target)?;
@@ -206,6 +257,9 @@ impl Application {
         if !available.split_whitespace().any(|item| item == governor) {
             return Err(format!("GPU governor is not available: {governor}"));
         }
+        if is_performance_governor(governor) {
+            ensure_thermal_safe_for_increase()?;
+        }
         let target = device_path.join("governor");
         ensure_writable(&target)?;
         self.capture_target_baseline(&target)?;
@@ -225,6 +279,17 @@ impl Application {
         let device_path = resolve_devfreq_path(device)?;
         let requested = parse_frequency(value)?;
         validate_devfreq_frequency(&device_path, attribute, requested)?;
+        let current = read_optional_first_u64(
+            &device_path,
+            match attribute {
+                "min_freq" => &["min_freq", "scaling_min_freq"],
+                "max_freq" => &["max_freq", "scaling_max_freq"],
+                _ => &[],
+            },
+        );
+        if current.map(|value| requested > value).unwrap_or(true) {
+            ensure_thermal_safe_for_increase()?;
+        }
         let target = resolve_devfreq_frequency_path(&device_path, attribute)?;
         self.capture_target_baseline(&target)?;
         write_and_verify(&target, &requested.to_string())?;
@@ -287,7 +352,38 @@ impl Application {
         println!("  archctl gpu set-governor <device> <governor>");
         println!("  archctl gpu set-min <device> <frequency>");
         println!("  archctl gpu set-max <device> <frequency>");
+        println!("  archctl thermal list");
+        println!("  archctl thermal check");
     }
+}
+
+fn thermal_limit_millicelsius() -> i64 {
+    std::env::var("ARCH_MANAGER_THERMAL_LIMIT_MC")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(55_000)
+}
+
+fn ensure_thermal_safe_for_increase() -> Result<(), String> {
+    let hottest = discovery::scan()
+        .thermal_zones
+        .into_iter()
+        .filter_map(|zone| zone.temperature_millicelsius)
+        .max();
+    let limit = thermal_limit_millicelsius();
+    if let Some(value) = hottest {
+        if value >= limit {
+            return Err(format!(
+                "thermal guard blocked performance increase: {value} >= {limit} millicelsius"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_performance_governor(governor: &str) -> bool {
+    governor.eq_ignore_ascii_case("performance")
+        || governor.to_ascii_lowercase().contains("performance")
 }
 
 fn resolve_devfreq_path(device: &str) -> Result<PathBuf, String> {
