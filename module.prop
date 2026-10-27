@@ -1,6 +1,6 @@
 id=arch-manager
 name=ARCH Manager
-version=0.2.0
-versionCode=10
+version=0.2.1
+versionCode=11
 author=ARCH Manager Contributors
 description=Rust-based Android kernel manager with safe profiles, adaptive modes, validation, and guarded controls

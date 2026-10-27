@@ -106,17 +106,18 @@ jobs:
           PACKAGE="dist/ARCH-Manager-${VERSION}-${{ matrix.abi }}.zip"
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}/bin"
-          cp module.prop service.sh action.sh uninstall.sh "${STAGE}/"
+          cp module.prop customize.sh service.sh action.sh uninstall.sh "${STAGE}/"
           cp "target/${{ matrix.target }}/release/archctl" "${STAGE}/bin/archctl"
-          chmod 0755 "${STAGE}/service.sh" "${STAGE}/action.sh" "${STAGE}/uninstall.sh" "${STAGE}/bin/archctl"
+          chmod 0755 "${STAGE}/customize.sh" "${STAGE}/service.sh" "${STAGE}/action.sh" "${STAGE}/uninstall.sh" "${STAGE}/bin/archctl"
           test -f "${STAGE}/module.prop"
           test -x "${STAGE}/bin/archctl"
           (cd "${STAGE}" && zip -q -r "../$(basename "${PACKAGE}")" .)
           unzip -l "${PACKAGE}"
+          test "$(unzip -Z1 "${PACKAGE}" | grep -v '/$' | sort | tr '\n' ' ')" = "action.sh bin/archctl customize.sh module.prop service.sh uninstall.sh "
           mkdir -p "dist/check-${{ matrix.abi }}"
           unzip -q "${PACKAGE}" -d "dist/check-${{ matrix.abi }}"
           test -x "dist/check-${{ matrix.abi }}/bin/archctl"
-          bash -n "dist/check-${{ matrix.abi }}/service.sh" "dist/check-${{ matrix.abi }}/action.sh" "dist/check-${{ matrix.abi }}/uninstall.sh"
+          bash -n "dist/check-${{ matrix.abi }}/customize.sh" "dist/check-${{ matrix.abi }}/service.sh" "dist/check-${{ matrix.abi }}/action.sh" "dist/check-${{ matrix.abi }}/uninstall.sh"
 
       - name: Upload flashable module
         uses: actions/upload-artifact@v4

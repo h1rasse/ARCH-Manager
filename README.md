@@ -220,7 +220,7 @@ sh action.sh restore
 
 The repository includes a GitHub Actions workflow at `.github/workflows/build-module.yml`. It cross-compiles `archctl` with the Android NDK into ELF binaries for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86`. Each job verifies the ELF header, stages `bin/archctl`, checks script permissions and syntax, and uploads a flashable ZIP artifact.
 
-Run the workflow from the GitHub Actions tab or with a workflow dispatch. For a tagged release, push a tag such as `v0.2.0`; the workflow publishes one ZIP per ABI as release assets. Install only the ZIP matching the device ABI, normally `ARCH-Manager-0.2.0-arm64-v8a.zip` for modern Android ARM64 devices.
+Run the workflow from the GitHub Actions tab or with a workflow dispatch. For a tagged release, push a tag such as `v0.2.1`; the workflow publishes one ZIP per ABI as release assets. Install only the ZIP matching the device ABI, normally `ARCH-Manager-0.2.1-arm64-v8a.zip` for modern Android ARM64 devices.
 
 After installation, verify the module from a root shell or the manager action:
 
@@ -230,4 +230,4 @@ archctl scan
 archctl status
 ```
 
-The source-tree `target/release/archctl` binary is not a flashable Android binary. Use the workflow artifact because it contains the Android ELF binary and the module lifecycle files in the expected ZIP structure.
+The source-tree `target/release/archctl` binary is not a flashable Android binary. Use the workflow artifact because it contains the Android ELF binary and the module lifecycle files in the expected ZIP structure. The package also includes `customize.sh`, which applies executable permissions during Magisk/KernelSU installation. `META-INF` is intentionally omitted because recovery flashing is a separate Magisk installer format and KernelSU does not support custom recovery installation; install this package from the Magisk or KernelSU manager.
