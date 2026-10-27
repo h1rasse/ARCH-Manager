@@ -1,3 +1,7 @@
 target/
 runtime/
 *.log
+
+/webroot
+webui/node_modules
+webui/dist

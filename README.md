@@ -231,3 +231,17 @@ archctl status
 ```
 
 The source-tree `target/release/archctl` binary is not a flashable Android binary. Use the workflow artifact because it contains the Android ELF binary and the module lifecycle files in the expected ZIP structure. The package also includes `customize.sh`, which applies executable permissions during Magisk/KernelSU installation. `META-INF` is intentionally omitted because recovery flashing is a separate Magisk installer format and KernelSU does not support custom recovery installation; install this package from the Magisk or KernelSU manager.
+
+## WebUI (KernelSU)
+
+The module ships a KernelSU WebUI at `webroot/index.html`, built from `webui/` with vanilla JavaScript, Vite, the local `kernelsu` package, and no CDN. Every kernel operation goes through `/data/adb/modules/arch-manager/bin/archctl`; the WebUI never writes to `/sys`, `/proc`, or `/data/adb` directly, and every write requires a confirmation dialog.
+
+```sh
+cd webui
+npm install
+npm test
+npm run build
+npm run dev
+```
+
+Development mock mode is enabled only with `VITE_MOCK=1` and is excluded from production bundles by CI verification. `scripts/verify-package.sh <zip>` validates the final module ZIP layout. The adaptive daemon remains a foreground process without a start/stop command, so the WebUI displays its status and directs users to the root shell for daemon startup.

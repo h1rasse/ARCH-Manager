@@ -1,0 +1,34 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import * as L from "../src/logic.js";
+
+const known = { cpu: { policy0: { gov: ["schedutil"], freq: ["300000", "1800000"] } }, gpu: {}, cooling: { cooling_device0: {} }, tcp: ["cubic"], profiles: ["balanced"] };
+
+test("buildCommand quotes and rejects unsafe arguments", () => {
+  assert.equal(L.buildCommand(["cpu", "list"]), `${L.BIN} 'cpu' 'list'`);
+  assert.throws(() => L.buildCommand(["cpu", "list; rm -rf /"]));
+  assert.throws(() => L.buildCommand(["a b"]));
+});
+
+test("writeArgs enforces discovery allowlists", () => {
+  assert.deepEqual(L.writeArgs("cpu-gov", { id: "policy0", value: "schedutil" }, known), ["cpu", "set-governor", "policy0", "schedutil"]);
+  assert.throws(() => L.writeArgs("cpu-gov", { id: "policy0", value: "bogus" }, known));
+  assert.throws(() => L.writeArgs("cpu-max", { id: "policy0", value: "999" }, known));
+  assert.throws(() => L.writeArgs("core-offline", { id: "cpu0" }, known));
+  assert.throws(() => L.writeArgs("uclamp-max", { id: "top-app", value: "1025" }, known));
+  assert.throws(() => L.writeArgs("tcp", { value: "x" }, known));
+});
+
+test("parseDryRun extracts planned changes and skipped lines", () => {
+  const out = "Dry run: CPU policy0 governor -> performance\nDry run: GPU kgsl-3d0 maximum frequency -> 587000000\nDry run completed: 2 planned operation(s)\n";
+  const r = L.parseDryRun(out, "Skipped CPU policy4: governor unavailable: performance\n");
+  assert.equal(r.changes.length, 2);
+  assert.equal(r.skipped.length, 1);
+  assert.equal(L.parseDryRun("Dry run: restore captured baseline\n", "").restore, true);
+});
+
+test("classify and parseJson handle failures", () => {
+  assert.equal(L.classify({ errno: 127, stdout: "", stderr: "not found" }).kind, "missing");
+  assert.equal(L.classify({ errno: 1, stdout: "", stderr: "Permission denied" }).kind, "permission");
+  assert.equal(L.parseJson("{bad").ok, false);
+});

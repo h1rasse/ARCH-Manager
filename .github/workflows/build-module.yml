@@ -12,8 +12,50 @@ permissions:
   contents: write
 
 jobs:
+  webui:
+    name: Build WebUI
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: webui
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+
+      - name: Unit tests
+        working-directory: webui
+        run: npm test
+
+      - name: Build WebUI
+        working-directory: webui
+        run: npm run build
+
+      - name: Verify WebUI output
+        run: |
+          set -euo pipefail
+          test -f webroot/index.html
+          test -f webroot/app.js
+          test -f webroot/styles.css
+          ls webroot/assets/*
+          ! grep -Eqi '(src|href)=["'"'"']?(https?:)?//' webroot/index.html
+
+      - name: Upload WebUI
+        uses: actions/upload-artifact@v4
+        with:
+          name: webroot
+          path: webroot
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.abi }}
+    needs: webui
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -36,6 +78,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download WebUI
+        uses: actions/download-artifact@v4
+        with:
+          name: webroot
+          path: webroot
+
+      - name: Shell syntax check
+        run: bash -n customize.sh service.sh action.sh uninstall.sh scripts/verify-package.sh
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -107,17 +158,16 @@ jobs:
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}/bin"
           cp module.prop customize.sh service.sh action.sh uninstall.sh "${STAGE}/"
+          cp -r webroot "${STAGE}/webroot"
           cp "target/${{ matrix.target }}/release/archctl" "${STAGE}/bin/archctl"
           chmod 0755 "${STAGE}/customize.sh" "${STAGE}/service.sh" "${STAGE}/action.sh" "${STAGE}/uninstall.sh" "${STAGE}/bin/archctl"
           test -f "${STAGE}/module.prop"
           test -x "${STAGE}/bin/archctl"
           (cd "${STAGE}" && zip -q -r "../$(basename "${PACKAGE}")" .)
           unzip -l "${PACKAGE}"
-          test "$(unzip -Z1 "${PACKAGE}" | grep -v '/$' | sort | tr '\n' ' ')" = "action.sh bin/archctl customize.sh module.prop service.sh uninstall.sh "
-          mkdir -p "dist/check-${{ matrix.abi }}"
+          ./scripts/verify-package.sh "${PACKAGE}"
           unzip -q "${PACKAGE}" -d "dist/check-${{ matrix.abi }}"
           test -x "dist/check-${{ matrix.abi }}/bin/archctl"
-          bash -n "dist/check-${{ matrix.abi }}/customize.sh" "dist/check-${{ matrix.abi }}/service.sh" "dist/check-${{ matrix.abi }}/action.sh" "dist/check-${{ matrix.abi }}/uninstall.sh"
 
       - name: Upload flashable module
         uses: actions/upload-artifact@v4
