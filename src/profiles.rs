@@ -64,7 +64,7 @@ pub fn builtin_profiles() -> Vec<Profile> {
         },
         Profile {
             name: "gaming".to_string(),
-            description: "Use performance governor where supported and thermally safe".to_string(),
+            description: "Use performance governor and the highest kernel-reported CPU/GPU frequencies where available; thermal guard stays active".to_string(),
             cpu_governor: Some("performance".to_string()),
             cpu_min_freq: None,
             cpu_max_freq: None,

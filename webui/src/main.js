@@ -266,7 +266,12 @@ async function doPreview(name) {
   });
   const table = rows.length ? `<table><tr><th>Node</th><th>Before</th><th>After</th></tr>${rows.join("")}</table>` : esc(dry.restore ? "Restores captured baseline." : "No changes planned.");
   const note = raises ? await thermalNote() : null;
-  if (!await ask(`Apply ${name}?`, [table, note?.text], raises && note?.unsafe)) return;
+  const isGaming = name === "gaming";
+  const warning = isGaming
+    ? "<b>Performance warning:</b> Gaming requests the highest CPU/GPU frequencies reported by the kernel; it does not exceed the device's supported table. This may increase heat and battery drain. The thermal guard remains active and can block increases when temperatures are unsafe."
+    : null;
+  const title = isGaming ? "Enable Gaming profile?" : `Apply ${name}?`;
+  if (!await ask(title, [warning, table, note?.text], isGaming || (raises && note?.unsafe))) return;
   let applyArgs;
   try { applyArgs = writeArgs("profile", { value:name }, caps()); }
   catch(e) { toast = { ok:false, text:e.message }; return render(); }

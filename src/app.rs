@@ -564,7 +564,14 @@ impl Application {
                     eprintln!("Skipped CPU {name}: governor unavailable: {governor}");
                 }
             }
-            if let Some(frequency) = profile.cpu_max_freq {
+            let cpu_max_frequency = profile.cpu_max_freq.or_else(|| {
+                if profile.name == "gaming" {
+                    max_available_frequency(policy.available_frequencies.as_deref())
+                } else {
+                    None
+                }
+            });
+            if let Some(frequency) = cpu_max_frequency {
                 attempted += 1;
                 if dry_run {
                     println!("Dry run: CPU {name} maximum frequency -> {frequency}");
@@ -609,7 +616,14 @@ impl Application {
                     eprintln!("Skipped GPU {name}: governor unavailable: {governor}");
                 }
             }
-            if let Some(frequency) = profile.gpu_max_freq {
+            let gpu_max_frequency = profile.gpu_max_freq.or_else(|| {
+                if profile.name == "gaming" {
+                    max_available_frequency(device.available_frequencies.as_deref())
+                } else {
+                    None
+                }
+            });
+            if let Some(frequency) = gpu_max_frequency {
                 attempted += 1;
                 if dry_run {
                     println!("Dry run: GPU {name} maximum frequency -> {frequency}");
@@ -968,6 +982,14 @@ fn is_performance_governor(governor: &str) -> bool {
         || governor.to_ascii_lowercase().contains("performance")
 }
 
+fn max_available_frequency(values: Option<&str>) -> Option<u64> {
+    values?
+        .split_whitespace()
+        .filter_map(|value| value.parse::<u64>().ok())
+        .filter(|frequency| *frequency > 0)
+        .max()
+}
+
 fn resolve_devfreq_path(device: &str) -> Result<PathBuf, String> {
     let name = Path::new(device)
         .file_name()
@@ -1137,8 +1159,8 @@ fn lock_error(error: io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        core_number, parse_frequency, parse_uclamp, resolve_cooling_state_path,
-        resolve_devfreq_path, resolve_policy_path, validate_write_path,
+        core_number, max_available_frequency, parse_frequency, parse_uclamp,
+        resolve_cooling_state_path, resolve_devfreq_path, resolve_policy_path, validate_write_path,
     };
     use crate::network;
     use std::path::Path;
@@ -1160,6 +1182,16 @@ mod tests {
     fn parses_non_negative_frequency() {
         assert_eq!(parse_frequency("300000").unwrap(), 300000);
         assert!(parse_frequency("-1").is_err());
+    }
+
+    #[test]
+    fn selects_highest_positive_frequency_from_driver_table() {
+        assert_eq!(
+            max_available_frequency(Some("300000 1800000 960000 0 invalid")),
+            Some(1_800_000)
+        );
+        assert_eq!(max_available_frequency(Some("invalid 0 -1")), None);
+        assert_eq!(max_available_frequency(None), None);
     }
 
     #[test]
