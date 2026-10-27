@@ -126,18 +126,22 @@ function pick(op, id, options, current, fmt = (value) => value, label = "") {
   return `<label>${esc(label)}<select data-op="${op}" data-id="${esc(id)}">${list.map((option) => `<option value="${esc(option)}"${option === String(current) ? " selected" : ""}>${esc(fmt(option))}</option>`).join("")}</select></label>`;
 }
 
-function devCard(kind, item) {
+function devCard(kind, item, index = 0, count = 1) {
   const id = base(item.path);
   const cpu = kind === "cpu";
   const fmt = cpu ? L.fmtKhz : L.fmtHz;
   const governors = words(item.available_governors);
   const frequencies = nums(item.available_frequencies).map(String);
   const current = cpu ? [item.scaling_governor, item.scaling_min_freq, item.scaling_max_freq] : [item.governor, item.min_freq, item.max_freq];
-  const cluster = cpu ? `CPU ${item.affected_cpus ?? "policy"}` : (item.name ?? id);
+  const title = cpu ? L.cpuLabel(item) : L.gpuLabel(index, count);
+  const subtitle = cpu ? L.cpuCores(item) : L.gpuBackendLabel(item.backend);
+  const governorDetails = cpu
+    ? ["Available governors", governors.join(", ") || "n/a"]
+    : ["Active governor", current[0] || "n/a"];
   const details = cpu
-    ? kv([["Current frequency", fmt(item.scaling_cur_freq)], ["Available governors", governors.join(", ") || "n/a"], ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Kernel path", item.path]])
-    : kv([["Backend", item.backend], ["Available governors", governors.join(", ") || "n/a"], ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Kernel path", item.path]]);
-  return `<section class="tune-card card"><div class="tune-head"><div><span class="eyebrow">${cpu ? "CPU POLICY" : "GPU DEVICE"}</span><h3>${esc(id)}</h3><p class="muted">${esc(cluster)}</p></div>${badge(cpu ? "CPU" : "GPU", "info")}</div><div class="metric-line"><strong>${esc(fmt(cpu ? item.scaling_cur_freq : item.cur_freq))}</strong><span class="muted">current frequency</span></div><div class="ctl">${pick(`${kind}-gov`, id, governors, current[0], (value) => value, "Governor")}${pick(`${kind}-min`, id, frequencies, current[1], fmt, "Minimum")}${pick(`${kind}-max`, id, frequencies, current[2], fmt, "Maximum")}</div><details class="advanced"><summary>Advanced details</summary>${details}</details></section>`;
+    ? kv([["Current frequency", fmt(item.scaling_cur_freq)], ["Available governors", governors.join(", ") || "n/a"], ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Hardware identifier", id], ["Kernel path", item.path]])
+    : kv([["Backend", L.gpuBackendLabel(item.backend)], ["Device identifier", item.name ?? id], governorDetails, ["Frequency table", frequencies.map(fmt).join(", ") || "n/a"], ["Kernel path", item.path]]);
+  return `<section class="tune-card card"><div class="tune-head"><div><span class="eyebrow">${cpu ? "CPU PERFORMANCE" : "GRAPHICS PROCESSOR"}</span><h3>${esc(title)}</h3><p class="muted">${esc(subtitle)}</p>${cpu ? "" : `<p class="muted active-governor">Active governor · <strong>${esc(current[0] || "n/a")}</strong></p>`}</div>${badge(cpu ? "CPU" : "GPU", "info")}</div><div class="metric-line"><strong>${esc(fmt(cpu ? item.scaling_cur_freq : item.cur_freq))}</strong><span class="muted">current frequency</span></div><div class="ctl">${pick(`${kind}-gov`, id, governors, current[0], (value) => value, "Governor")}${pick(`${kind}-min`, id, frequencies, current[1], fmt, "Minimum")}${pick(`${kind}-max`, id, frequencies, current[2], fmt, "Maximum")}</div><details class="advanced"><summary>Advanced details</summary>${details}</details></section>`;
 }
 
 function thermalBanner() {
@@ -159,8 +163,8 @@ const views = {
       const device = value.device ?? {};
       const cpu = value.cpu_policies ?? [];
       const gpu = value.devfreq_devices ?? [];
-      const cpuSummary = cpu.map((item) => `<div class="summary-row"><span>${esc(base(item.path))}</span><strong>${esc(L.fmtKhz(item.scaling_cur_freq))}</strong><small>${esc(item.scaling_governor ?? "n/a")}</small></div>`).join("");
-      const gpuSummary = gpu.map((item) => `<div class="summary-row"><span>${esc(item.name ?? base(item.path))}</span><strong>${esc(L.fmtHz(item.cur_freq))}</strong><small>${esc(item.governor ?? "n/a")}</small></div>`).join("");
+      const cpuSummary = cpu.map((item) => `<div class="summary-row"><span>${esc(L.cpuLabel(item))} · ${esc(L.cpuCores(item))}</span><strong>${esc(L.fmtKhz(item.scaling_cur_freq))}</strong><small>${esc(item.scaling_governor ?? "n/a")}</small></div>`).join("");
+      const gpuSummary = gpu.map((item, index) => `<div class="summary-row"><span>${esc(L.gpuLabel(index, gpu.length))} · ${esc(L.gpuBackendLabel(item.backend))}</span><strong>${esc(L.fmtHz(item.cur_freq))}</strong><small>${esc(item.governor ?? "n/a")}</small></div>`).join("");
       return `<div class="welcome"><div><span class="eyebrow">PERFORMANCE CONSOLE</span><h2>Good to see you</h2><p>${esc(device.machine ?? device.soc_id ?? "Device ready")} · ${esc(device.android_version ?? "Android")}</p></div><span class="live-dot">LIVE</span></div><div class="summary-grid"><section class="card summary-card"><div class="section-title"><span>CPU</span>${badge(`${cpu.length} policies`, "info")}</div>${cpuSummary || empty("No CPU policy")}</section><section class="card summary-card"><div class="section-title"><span>GPU</span>${badge(`${gpu.length} devices`, "info")}</div>${gpuSummary || empty("No GPU device")}</section></div>`;
     });
     const profiles = block(data.profiles, (list) => `<div class="section-title"><h2>Quick profiles</h2><button class="text-button" data-page="Profiles">View all</button></div><div class="profile-stack">${list.slice(0, 3).map((profile) => profileCard(profile, true)).join("")}</div>`);
@@ -181,7 +185,7 @@ const views = {
     });
     return `<div class="page-intro"><span class="eyebrow">PROCESSOR</span><h2>CPU control</h2><p>Tune each performance policy with safe frequency tables.</p></div>${cpu}${core}`;
   },
-  GPU: () => `<div class="page-intro"><span class="eyebrow">GRAPHICS</span><h2>GPU control</h2><p>Manage graphics frequency and governor targets.</p></div>${block(data.gpu, (value) => value.length ? value.map((item) => devCard("gpu", item)).join("") : empty("No Devfreq devices found."))}`,
+  GPU: () => `<div class="page-intro"><span class="eyebrow">GRAPHICS</span><h2>GPU control</h2><p>Manage graphics frequency and governor targets.</p></div>${block(data.gpu, (value) => value.length ? value.map((item, index) => devCard("gpu", item, index, value.length)).join("") : empty("No Devfreq devices found."))}`,
   Profiles: () => `<div class="page-intro"><span class="eyebrow">TUNING</span><h2>Performance profiles</h2><p>Choose a safe preset for the way you use your device.</p></div>${block(data.profiles, (list) => (list.map((profile) => profileCard(profile)).join("") || empty("No profiles available.")) + `<section class="card restore-card"><div><span class="eyebrow">SAFETY NET</span><h3>Restore baseline</h3><p>Return captured kernel values to their original state.</p></div><button class="danger" data-act="restore">Restore</button></section>`)}`,
   Thermal() {
     const zones = block(data.zones, (value) => value.length ? value.map((zone) => `<details class="card advanced"><summary>${esc(zone.zone_type || base(zone.path))}<span>${esc(L.fmtTemp(zone.temperature_millicelsius))}</span></summary>${kv([["Zone", base(zone.path)], ["Temperature", L.fmtTemp(zone.temperature_millicelsius)], ["Critical trip", L.fmtTemp(zone.critical_trip_millicelsius)]])}</details>`).join("") : empty("No thermal zones found."));

@@ -11,6 +11,27 @@ const FIXED = new Set([
 export const base = (path) => String(path ?? "").split("/").filter(Boolean).pop() ?? "";
 export const words = (text) => String(text ?? "").split(/\s+/).filter(Boolean);
 export const nums = (text) => words(text).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+export function cpuLabel(item) {
+  const id = base(item?.path);
+  const match = /^policy(\d+)$/i.exec(id);
+  return match ? `CPU cluster ${Number(match[1])}` : (id ? `CPU ${id}` : "CPU cluster");
+}
+
+export function cpuCores(item) {
+  const cores = words(item?.affected_cpus).map(Number).filter(Number.isInteger).sort((a, b) => a - b);
+  if (!cores.length) return "CPU frequency policy";
+  const contiguous = cores.every((core, index) => index === 0 || core === cores[index - 1] + 1);
+  return `Cores ${contiguous ? `${cores[0]}–${cores[cores.length - 1]}` : cores.join(", ")}`;
+}
+
+export function gpuLabel(index = 0, count = 1) {
+  return count > 1 ? `GPU ${index + 1}` : "GPU";
+}
+
+export function gpuBackendLabel(backend) {
+  return ({ "qualcomm-kgsl": "Qualcomm Adreno", "mali-devfreq": "ARM Mali", "mediatek-vendor": "MediaTek" })[backend] ?? "Graphics processor";
+}
+
 export const esc = (value) =>
   String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 

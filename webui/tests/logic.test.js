@@ -4,6 +4,16 @@ import * as L from "../src/logic.js";
 
 const known = { cpu: { policy0: { gov: ["schedutil"], freq: ["300000", "1800000"] } }, gpu: {}, cooling: { cooling_device0: {} }, tcp: ["cubic"], profiles: ["balanced"] };
 
+test("friendly device labels hide raw policy and vendor node names", () => {
+  const cpu = { path: "/sys/devices/system/cpu/cpufreq/policy0", affected_cpus: "0 1 2 3" };
+  assert.equal(L.cpuLabel(cpu), "CPU cluster 0");
+  assert.equal(L.cpuCores(cpu), "Cores 0–3");
+  assert.equal(L.gpuLabel(), "GPU");
+  assert.equal(L.gpuLabel(1, 2), "GPU 2");
+  assert.equal(L.gpuBackendLabel("qualcomm-kgsl"), "Qualcomm Adreno");
+  assert.equal(L.gpuBackendLabel("unknown"), "Graphics processor");
+});
+
 test("buildCommand quotes and rejects unsafe arguments", () => {
   assert.equal(L.buildCommand(["cpu", "list"]), `${L.BIN} 'cpu' 'list'`);
   assert.throws(() => L.buildCommand(["cpu", "list; rm -rf /"]));
