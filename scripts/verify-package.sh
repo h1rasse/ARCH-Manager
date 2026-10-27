@@ -5,12 +5,12 @@ ZIP="${1:?usage: verify-package.sh <module.zip>}"
 LIST="$(unzip -Z1 "${ZIP}")"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-for entry in module.prop customize.sh service.sh action.sh uninstall.sh bin/archctl \
-  assets/icon.png assets/banner.png webroot/index.html webroot/app.js webroot/styles.css; do
+for entry in module.prop banner.png customize.sh service.sh action.sh uninstall.sh bin/archctl \
+  assets/icon.png webroot/index.html webroot/app.js webroot/styles.css; do
   grep -qx "${entry}" <<<"${LIST}" || fail "missing ${entry}"
 done
 grep -q '^webroot/assets/.' <<<"${LIST}" || fail "webroot/assets is empty"
-if grep -Ev '^(module\.prop|customize\.sh|service\.sh|action\.sh|uninstall\.sh|assets/|bin/|webroot/)' <<<"${LIST}"; then
+if grep -Ev '^(module\.prop|banner\.png|customize\.sh|service\.sh|action\.sh|uninstall\.sh|assets/|bin/|webroot/)' <<<"${LIST}"; then
   fail "unexpected top-level entries (nested folder?)"
 fi
 for entry in bin/archctl service.sh action.sh customize.sh uninstall.sh; do
@@ -20,6 +20,7 @@ done
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 unzip -q "${ZIP}" -d "${TMP}"
+grep -qx 'banner=banner.png' "${TMP}/module.prop" || fail "module.prop must reference banner.png at module root"
 bash -n "${TMP}/customize.sh" "${TMP}/service.sh" "${TMP}/action.sh" "${TMP}/uninstall.sh"
 
 W="${TMP}/webroot"

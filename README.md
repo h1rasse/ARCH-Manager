@@ -1,6 +1,6 @@
 # ARCH Manager
 
-![ARCH Manager banner](assets/banner.png)
+![ARCH Manager banner](banner.png)
 
 ARCH Manager is a Rust-based Android kernel capability and state controller designed for Magisk and KernelSU environments.
 

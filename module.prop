@@ -4,5 +4,6 @@ version=0.2.2
 versionCode=12
 author=ARCH Manager Contributors
 description=Rust-based Android kernel manager with safe profiles, adaptive modes, validation, and guarded controls
+banner=banner.png
 actionIcon=assets/icon.png
 webuiIcon=assets/icon.png
