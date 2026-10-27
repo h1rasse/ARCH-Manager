@@ -145,8 +145,11 @@ button { cursor: pointer; color: inherit; }
 nav {
   position: fixed;
   z-index: 50;
-  inset: auto 50% calc(env(safe-area-inset-bottom,0px) + 10px);
-  transform: translateX(50%);
+  top: auto;
+  right: auto;
+  bottom: calc(env(safe-area-inset-bottom,0px) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   gap: 2px;
   padding: 5px;
