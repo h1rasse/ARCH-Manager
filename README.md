@@ -130,3 +130,23 @@ The `stock` profile restores the captured baseline. Custom profiles can be place
 ```
 
 Unsupported governors are skipped per device. Frequency changes still use capability validation, baseline capture, write verification, and the Phase 4 thermal guard. Profiles are not applied automatically by the boot service.
+
+## Phase 6
+
+Phase 6 adds adaptive modes and an optional foreground daemon that applies profiles only when the screen state changes.
+
+Available modes:
+
+- `auto`: `balanced` when the screen is on and `stock` when it is off
+- `performance`: `performance` in both screen states
+- `battery`: `battery` when the screen is on and `stock` when it is off
+- `strict`: `stock` in every state
+
+```sh
+archctl mode show
+archctl mode set auto
+archctl daemon status
+archctl daemon run 8
+```
+
+The daemon uses Android `dumpsys power` output to detect screen state, applies a profile only after a state transition, and ignores unknown states. It is not started by `service.sh`; launch it explicitly after verifying the desired mode. The interval must be between 2 and 300 seconds.

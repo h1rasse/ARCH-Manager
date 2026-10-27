@@ -10,6 +10,8 @@ pub struct RuntimeConfig {
     pub capabilities_file: PathBuf,
     pub baseline_file: PathBuf,
     pub profiles_dir: PathBuf,
+    pub mode_file: PathBuf,
+    pub daemon_lock_file: PathBuf,
 }
 
 impl RuntimeConfig {
@@ -27,6 +29,8 @@ impl RuntimeConfig {
             capabilities_file: state_dir.join("capabilities.json"),
             baseline_file: state_dir.join("baseline.json"),
             profiles_dir,
+            mode_file: state_dir.join("mode"),
+            daemon_lock_file: state_dir.join("daemon.lock"),
             state_dir,
         }
     }

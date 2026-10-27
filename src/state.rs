@@ -12,12 +12,13 @@ pub struct ProcessLock {
 
 impl ProcessLock {
     pub fn acquire(config: &RuntimeConfig) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&config.lock_file)?;
+        Self::acquire_path(&config.lock_file)
+    }
+
+    pub fn acquire_path(path: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
         Ok(Self {
-            path: config.lock_file.clone(),
+            path: path.to_path_buf(),
             file: Some(file),
         })
     }

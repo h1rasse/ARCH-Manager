@@ -1,3 +1,4 @@
+use crate::adaptive::{self, Mode, ScreenState};
 use crate::config::RuntimeConfig;
 use crate::discovery;
 use crate::logging;
@@ -42,6 +43,15 @@ impl Application {
                 self.profile_apply(name, true)
             }
             [command, action] if command == "profile" && action == "restore" => self.restore(),
+            [command, action] if command == "mode" && action == "show" => self.mode_show(),
+            [command, action, value] if command == "mode" && action == "set" => {
+                self.mode_set(value)
+            }
+            [command, action] if command == "daemon" && action == "status" => self.daemon_status(),
+            [command, action] if command == "daemon" && action == "run" => self.daemon_run(None),
+            [command, action, interval] if command == "daemon" && action == "run" => {
+                self.daemon_run(Some(interval))
+            }
             [command, action, policy, value] if command == "cpu" && action == "set-governor" => {
                 self.set_cpu_governor(policy, value)
             }
@@ -75,6 +85,69 @@ impl Application {
     fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.config.state_dir)
             .and_then(|_| fs::create_dir_all(&self.config.profiles_dir))
+    }
+
+    fn mode_show(&self) -> Result<(), String> {
+        let mode = adaptive::load_mode(&self.config.mode_file)?;
+        let state = adaptive::screen_state();
+        let report = serde_json::json!({
+            "mode": mode.as_str(),
+            "screen_state": adaptive::screen_state_name(state),
+            "daemon_command": "archctl daemon run",
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn mode_set(&self, value: &str) -> Result<(), String> {
+        let mode = Mode::parse(value)?;
+        adaptive::save_mode(&self.config.mode_file, &mode)?;
+        println!("Adaptive mode set: {}", mode.as_str());
+        Ok(())
+    }
+
+    fn daemon_status(&self) -> Result<(), String> {
+        let mode = adaptive::load_mode(&self.config.mode_file)?;
+        let state = adaptive::screen_state();
+        let running = self.config.daemon_lock_file.exists();
+        let report = serde_json::json!({
+            "mode": mode.as_str(),
+            "screen_state": adaptive::screen_state_name(state),
+            "running": running,
+            "interval_seconds": daemon_interval(None)?,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn daemon_run(&self, interval: Option<&str>) -> Result<(), String> {
+        let interval = daemon_interval(interval)?;
+        let _lock = ProcessLock::acquire_path(&self.config.daemon_lock_file).map_err(lock_error)?;
+        let mut previous = ScreenState::Unknown;
+        println!("Adaptive daemon started with interval {interval}s");
+        loop {
+            let state = adaptive::screen_state();
+            if state != ScreenState::Unknown && state != previous {
+                let mode = adaptive::load_mode(&self.config.mode_file)?;
+                if let Some(profile) = adaptive::target_profile(&mode, state) {
+                    println!(
+                        "Screen state changed: {} -> profile {profile}",
+                        adaptive::screen_state_name(state)
+                    );
+                    if let Err(error) = self.profile_apply(profile, false) {
+                        eprintln!("Adaptive profile failed: {error}");
+                    }
+                }
+                previous = state;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+        }
     }
 
     fn scan(&self) -> Result<(), String> {
@@ -519,6 +592,10 @@ impl Application {
         println!("  archctl profile show <name>");
         println!("  archctl profile apply <name> [--dry-run]");
         println!("  archctl profile restore");
+        println!("  archctl mode show");
+        println!("  archctl mode set <auto|performance|battery|strict>");
+        println!("  archctl daemon status");
+        println!("  archctl daemon run [interval_seconds]");
     }
 }
 
@@ -536,6 +613,21 @@ fn device_name(path: &str) -> Result<String, String> {
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .ok_or_else(|| format!("invalid Devfreq device path: {path}"))
+}
+
+fn daemon_interval(value: Option<&str>) -> Result<u64, String> {
+    let interval = value
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("invalid daemon interval: {value}"))
+        })
+        .transpose()?
+        .unwrap_or(8);
+    if !(2..=300).contains(&interval) {
+        return Err("daemon interval must be between 2 and 300 seconds".to_string());
+    }
+    Ok(interval)
 }
 
 fn thermal_limit_millicelsius() -> i64 {

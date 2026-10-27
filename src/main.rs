@@ -1,3 +1,4 @@
+mod adaptive;
 mod app;
 mod config;
 mod discovery;
