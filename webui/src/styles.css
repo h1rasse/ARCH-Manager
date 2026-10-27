@@ -585,13 +585,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .core-item .btn { margin-left: auto; }
 
 /* ── More page ───────────────────────────────────────────────────────── */
-.more-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-@media (max-width: 380px) { .more-grid { grid-template-columns: 1fr; } }
+.more-grid { display: grid; grid-template-columns: 1fr; gap: 6px; }
 .more-btn {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 15px;
+  gap: 14px;
+  padding: 14px 16px;
+  width: 100%;
   background: var(--s0);
   border: 1px solid var(--line);
   border-radius: var(--r);
