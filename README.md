@@ -215,3 +215,19 @@ sh action.sh restore
 ```
 
 `service.sh` now runs scan, captures the baseline once, and performs a non-blocking validation pass. It does not start the adaptive daemon or apply a profile automatically. `uninstall.sh` continues to restore the captured baseline before module removal.
+
+## Android module build
+
+The repository includes a GitHub Actions workflow at `.github/workflows/build-module.yml`. It cross-compiles `archctl` with the Android NDK into ELF binaries for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86`. Each job verifies the ELF header, stages `bin/archctl`, checks script permissions and syntax, and uploads a flashable ZIP artifact.
+
+Run the workflow from the GitHub Actions tab or with a workflow dispatch. For a tagged release, push a tag such as `v0.2.0`; the workflow publishes one ZIP per ABI as release assets. Install only the ZIP matching the device ABI, normally `ARCH-Manager-0.2.0-arm64-v8a.zip` for modern Android ARM64 devices.
+
+After installation, verify the module from a root shell or the manager action:
+
+```sh
+archctl validate --json
+archctl scan
+archctl status
+```
+
+The source-tree `target/release/archctl` binary is not a flashable Android binary. Use the workflow artifact because it contains the Android ELF binary and the module lifecycle files in the expected ZIP structure.

@@ -1,3 +1,5 @@
+#!/system/bin/sh
+
 MODDIR=${0%/*}
 ARCHCTL="$MODDIR/bin/archctl"
 STATE_DIR=/data/adb/arch-manager/state
