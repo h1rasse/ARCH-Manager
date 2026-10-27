@@ -7,7 +7,7 @@ const { esc, base, words, nums } = L;
 const PAGES = ["Dashboard", "CPU", "GPU", "Profiles", "More"];
 const DETAIL_PAGES = ["Thermal", "Scheduler", "Network", "Settings"];
 const SOURCES = {
-  Dashboard: { status: ["status", "--json"], validate: ["validate", "--json"], check: ["thermal", "check"], profiles: ["profile", "list"], cpu: ["cpu", "list"], gpu: ["gpu", "list"] },
+  Dashboard: { status: ["status", "--json"], validate: ["validate", "--json"], check: ["thermal", "check"], mode: ["mode", "show"], profiles: ["profile", "list"], cpu: ["cpu", "list"], gpu: ["gpu", "list"] },
   CPU: { cpu: ["cpu", "list"], core: ["core", "list"] },
   GPU: { gpu: ["gpu", "list"] },
   Thermal: { check: ["thermal", "check"], zones: ["thermal", "list"], cooling: ["thermal", "cooling", "list"] },
@@ -26,6 +26,7 @@ let last = null;
 let mock = null;
 let chain = Promise.resolve();
 let simpleMode = localStorage.getItem("arch-simple-mode") !== "advanced";
+let renderedPage = null;
 
 const view = document.querySelector("#view");
 const dlg = document.querySelector("#dlg");
@@ -151,7 +152,11 @@ function thermalBanner() {
   if (!result?.ok) return result ? fail(result) : "";
   const value = result.value;
   const safe = value.safe_for_performance_increase;
-  return `<section class="thermal-hero ${safe ? "safe" : "unsafe"}"><div class="thermal-orb"><span>${esc(L.fmtTemp(value.hottest_millicelsius))}</span><small>${safe ? "SAFE" : "CAUTION"}</small></div><div><span class="eyebrow">THERMAL STATUS</span><h2>${safe ? "Ready for performance" : "Performance protected"}</h2><p>${safe ? "Temperature is within the safe operating range." : "Performance increases are blocked by the thermal guard."}</p></div></section>`;
+  const hasThermalValues = value.limit_millicelsius != null && value.hottest_millicelsius != null;
+  const headroom = hasThermalValues && Number.isFinite(Number(value.limit_millicelsius)) && Number.isFinite(Number(value.hottest_millicelsius))
+    ? L.fmtTemp(Number(value.limit_millicelsius) - Number(value.hottest_millicelsius))
+    : "n/a";
+  return `<section class="thermal-hero ${safe ? "safe" : "unsafe"}"><div class="thermal-orb"><span>${esc(L.fmtTemp(value.hottest_millicelsius))}</span><small>PEAK TEMP</small></div><div class="thermal-copy"><span class="eyebrow">THERMAL SAFETY</span><h2>${safe ? "Within safe range" : "Thermal guard active"}</h2><p>${safe ? "There is room for guarded performance increases." : "Performance increases are blocked until the device cools."}</p><div class="thermal-facts"><div><span>Guard limit</span><strong>${esc(L.fmtTemp(value.limit_millicelsius))}</strong></div><div><span>Headroom</span><strong>${esc(headroom)}</strong></div></div></div></section>`;
 }
 
 function profileCard(profile, compact = false) {
@@ -165,13 +170,14 @@ const views = {
       const device = value.device ?? {};
       const cpu = value.cpu_policies ?? [];
       const gpu = value.devfreq_devices ?? [];
-      const cpuSummary = cpu.map((item) => `<div class="summary-row"><span>${esc(L.cpuLabel(item))} · ${esc(L.cpuCores(item))}</span><strong>${esc(L.fmtKhz(item.scaling_cur_freq))}</strong><small>${esc(item.scaling_governor ?? "n/a")}</small></div>`).join("");
-      const gpuSummary = gpu.map((item, index) => `<div class="summary-row"><span>${esc(L.gpuLabel(index, gpu.length))} · ${esc(L.gpuBackendLabel(item.backend))}</span><strong>${esc(L.fmtHz(item.cur_freq))}</strong><small>${esc(item.governor ?? "n/a")}</small></div>`).join("");
-      return `<div class="welcome"><div><span class="eyebrow">PERFORMANCE CONSOLE</span><h2>Good to see you</h2><p>${esc(device.machine ?? device.soc_id ?? "Device ready")} · ${esc(device.android_version ?? "Android")}</p></div><span class="live-dot">LIVE</span></div><div class="summary-grid"><section class="card summary-card"><div class="section-title"><span>CPU</span>${badge(`${cpu.length} policies`, "info")}</div>${cpuSummary || empty("No CPU policy")}</section><section class="card summary-card"><div class="section-title"><span>GPU</span>${badge(`${gpu.length} devices`, "info")}</div>${gpuSummary || empty("No GPU device")}</section></div>`;
+      const cpuSummary = cpu.map((item) => `<div class="summary-row"><span>${esc(L.cpuLabel(item))} · ${esc(L.cpuCores(item))}</span><strong>${esc(L.fmtKhz(item.scaling_cur_freq))}</strong><small>Active governor <b>${esc(item.scaling_governor ?? "n/a")}</b></small></div>`).join("");
+      const gpuSummary = gpu.map((item, index) => `<div class="summary-row"><span>${esc(L.gpuLabel(index, gpu.length))} · ${esc(L.gpuBackendLabel(item.backend))}</span><strong>${esc(L.fmtHz(item.cur_freq))}</strong><small>Active governor <b>${esc(item.governor ?? "n/a")}</b></small></div>`).join("");
+      return `<div class="welcome"><div><span class="eyebrow">SYSTEM OVERVIEW</span><h2>${esc(device.machine ?? device.soc_id ?? "Device ready")}</h2><p>${esc(device.android_version ?? "Android")} · Current kernel readings</p></div><span class="live-dot">READY</span></div><div class="summary-grid"><section class="card summary-card"><div class="section-title"><span><i data-lucide="cpu" aria-hidden="true"></i> CPU</span>${badge(`${cpu.length} ${cpu.length === 1 ? "policy" : "policies"}`, "info")}</div>${cpuSummary || empty("No CPU frequency data is available.")}</section><section class="card summary-card"><div class="section-title"><span><i data-lucide="gauge" aria-hidden="true"></i> GPU</span>${badge(`${gpu.length} ${gpu.length === 1 ? "device" : "devices"}`, "info")}</div>${gpuSummary || empty("No GPU frequency data is available.")}</section></div>`;
     });
+    const mode = block(data.mode, (value) => `<section class="mode-card"><span class="mode-icon"><i data-lucide="sliders-horizontal" aria-hidden="true"></i></span><div class="mode-copy"><span class="eyebrow">PERFORMANCE MODE</span><h3>${esc((value.mode ?? "unknown").replace(/^./, (letter) => letter.toUpperCase()))}</h3><p>${esc(MODE_HELP[value.mode] ?? "Mode status reported by ARCH Manager.")}</p></div><div class="mode-state">${badge(`Screen ${value.screen_state ?? "unknown"}`, "info")}<button class="mode-link" data-page="Settings" aria-label="Open performance mode settings"><i data-lucide="arrow-right" aria-hidden="true"></i></button></div></section>`);
     const profiles = block(data.profiles, (list) => `<div class="section-title"><h2>Quick profiles</h2><button class="text-button" data-page="Profiles">View all</button></div><div class="profile-stack">${list.slice(0, 3).map((profile) => profileCard(profile, true)).join("")}</div>`);
     const validation = block(data.validate, (report) => `<div class="status-strip ${report.passed ? "ok" : "bad"}"><span>${report.passed ? "✓" : "!"}</span><div><strong>${report.passed ? "System ready" : "Validation needs attention"}</strong><small>${report.checks?.filter((check) => check.status === "pass").length ?? 0} checks passed</small></div></div>`);
-    return thermalBanner() + status + profiles + validation;
+    return thermalBanner() + status + mode + profiles + validation;
   },
   CPU() {
     const cpu = block(data.cpu, (value) => value.length ? value.map((item) => devCard("cpu", item)).join("") : empty("No CPU policies found."));
@@ -225,9 +231,23 @@ function renderNav() {
 
 function render() {
   const result = last ? `<div class="toast ${last.ok ? "ok" : "bad"}"><strong>${last.ok ? "Done" : "Unable to update"}</strong><span>${esc(last.text ?? "")}</span><button class="ghost" data-act="dismiss">×</button></div>` : "";
-  view.innerHTML = result + (page === "More" ? renderMore() : views[page]());
-  renderNav();
-  createIcons({ icons: LUCIDE_ICONS, attrs: { "stroke-width": 1.8 } });
+  const pageChanged = renderedPage !== null && renderedPage !== page;
+  const update = () => {
+    view.innerHTML = result + (page === "More" ? renderMore() : views[page]());
+    renderNav();
+    createIcons({ icons: LUCIDE_ICONS, attrs: { "stroke-width": 1.8 } });
+  };
+  renderedPage = page;
+  if (pageChanged && typeof document.startViewTransition === "function") {
+    document.startViewTransition(update);
+  } else {
+    update();
+    if (pageChanged) {
+      view.classList.remove("page-fallback-enter");
+      void view.offsetWidth;
+      view.classList.add("page-fallback-enter");
+    }
+  }
 }
 
 async function preview(name) {
