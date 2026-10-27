@@ -70,3 +70,17 @@ archctl restore
 ```
 
 CPU changes are not applied automatically at boot. The module boot service remains read-only and only performs discovery plus baseline capture.
+
+## Phase 3
+
+Phase 3 adds generic Devfreq/GPU control. Devices are classified for visibility as `generic-devfreq`, `qualcomm-kgsl`, `mali-devfreq`, or `mediatek-vendor`. Vendor classification does not enable vendor-specific writes; all writes use the available Devfreq interface.
+
+```sh
+archctl gpu list
+archctl gpu set-governor kgsl-3d0 msm-adreno-tz
+archctl gpu set-min kgsl-3d0 200000000
+archctl gpu set-max kgsl-3d0 587000000
+archctl restore
+```
+
+GPU frequency writes are accepted only when the frequency exists in `available_frequencies`, when the target node is writable, and when the new minimum and maximum remain consistent. No GPU setting is applied automatically during boot.

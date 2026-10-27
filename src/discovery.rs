@@ -49,6 +49,7 @@ pub struct CpuPolicy {
 #[derive(Debug, Serialize)]
 pub struct DevfreqDevice {
     pub path: String,
+    pub backend: String,
     pub name: Option<String>,
     pub governor: Option<String>,
     pub available_governors: Option<String>,
@@ -237,6 +238,7 @@ fn discover_devfreq_devices() -> Vec<DevfreqDevice> {
             ];
             DevfreqDevice {
                 path: path.display().to_string(),
+                backend: classify_devfreq_backend(&path),
                 name: read_value(&path.join("name")),
                 governor: read_value(&path.join("governor")),
                 available_governors: read_value(&path.join("available_governors")),
@@ -262,6 +264,24 @@ fn discover_devfreq_devices() -> Vec<DevfreqDevice> {
             }
         })
         .collect()
+}
+
+fn classify_devfreq_backend(path: &Path) -> String {
+    let identity = format!(
+        "{} {}",
+        path.display(),
+        read_value(&path.join("name")).unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    if identity.contains("kgsl") {
+        "qualcomm-kgsl".to_string()
+    } else if identity.contains("mali") || identity.contains("panfrost") {
+        "mali-devfreq".to_string()
+    } else if identity.contains("ged") || identity.contains("gpufreq") {
+        "mediatek-vendor".to_string()
+    } else {
+        "generic-devfreq".to_string()
+    }
 }
 
 fn discover_thermal_zones() -> Vec<ThermalZone> {

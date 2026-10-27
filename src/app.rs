@@ -25,6 +25,7 @@ impl Application {
             [command, flag] if command == "status" && flag == "--json" => self.status(true),
             [command] if command == "restore" => self.restore(),
             [command, action] if command == "cpu" && action == "list" => self.cpu_list(),
+            [command, action] if command == "gpu" && action == "list" => self.gpu_list(),
             [command, action, policy, value] if command == "cpu" && action == "set-governor" => {
                 self.set_cpu_governor(policy, value)
             }
@@ -33,6 +34,15 @@ impl Application {
             }
             [command, action, policy, value] if command == "cpu" && action == "set-max" => {
                 self.set_cpu_frequency(policy, "scaling_max_freq", value)
+            }
+            [command, action, device, value] if command == "gpu" && action == "set-governor" => {
+                self.set_gpu_governor(device, value)
+            }
+            [command, action, device, value] if command == "gpu" && action == "set-min" => {
+                self.set_gpu_frequency(device, "min_freq", value)
+            }
+            [command, action, device, value] if command == "gpu" && action == "set-max" => {
+                self.set_gpu_frequency(device, "max_freq", value)
             }
             [command] if command == "help" => {
                 Self::print_help();
@@ -102,6 +112,16 @@ impl Application {
         println!(
             "{}",
             serde_json::to_string_pretty(&capabilities.cpu_policies)
+                .map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+
+    fn gpu_list(&self) -> Result<(), String> {
+        let capabilities = discovery::scan();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&capabilities.devfreq_devices)
                 .map_err(|error| error.to_string())?
         );
         Ok(())
@@ -179,6 +199,45 @@ impl Application {
         Ok(())
     }
 
+    fn set_gpu_governor(&self, device: &str, governor: &str) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let device_path = resolve_devfreq_path(device)?;
+        let available = read_required(&device_path.join("available_governors"))?;
+        if !available.split_whitespace().any(|item| item == governor) {
+            return Err(format!("GPU governor is not available: {governor}"));
+        }
+        let target = device_path.join("governor");
+        ensure_writable(&target)?;
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, governor)?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!("GPU governor set for {device}"),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("GPU governor updated: {device} -> {governor}");
+        Ok(())
+    }
+
+    fn set_gpu_frequency(&self, device: &str, attribute: &str, value: &str) -> Result<(), String> {
+        let _lock = ProcessLock::acquire(&self.config).map_err(lock_error)?;
+        let device_path = resolve_devfreq_path(device)?;
+        let requested = parse_frequency(value)?;
+        validate_devfreq_frequency(&device_path, attribute, requested)?;
+        let target = resolve_devfreq_frequency_path(&device_path, attribute)?;
+        self.capture_target_baseline(&target)?;
+        write_and_verify(&target, &requested.to_string())?;
+        logging::write(
+            &self.config,
+            "INFO",
+            &format!("GPU frequency updated for {device}"),
+        )
+        .map_err(|error| error.to_string())?;
+        println!("GPU frequency updated: {device} {attribute} -> {requested}");
+        Ok(())
+    }
+
     fn capture_target_baseline(&self, target: &Path) -> Result<(), String> {
         let current = read_required(target)?;
         let mut baseline = if self.config.baseline_file.is_file() {
@@ -224,7 +283,92 @@ impl Application {
         println!("  archctl cpu set-governor <policy> <governor>");
         println!("  archctl cpu set-min <policy> <frequency>");
         println!("  archctl cpu set-max <policy> <frequency>");
+        println!("  archctl gpu list");
+        println!("  archctl gpu set-governor <device> <governor>");
+        println!("  archctl gpu set-min <device> <frequency>");
+        println!("  archctl gpu set-max <device> <frequency>");
     }
+}
+
+fn resolve_devfreq_path(device: &str) -> Result<PathBuf, String> {
+    let name = Path::new(device)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid Devfreq device".to_string())?;
+    if name.is_empty()
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+    {
+        return Err(format!("invalid Devfreq device: {device}"));
+    }
+    let path = PathBuf::from("/sys/class/devfreq").join(name);
+    if !path.is_dir() {
+        return Err(format!("Devfreq device does not exist: {name}"));
+    }
+    Ok(path)
+}
+
+fn resolve_devfreq_frequency_path(device: &Path, attribute: &str) -> Result<PathBuf, String> {
+    let names = match attribute {
+        "min_freq" => ["min_freq", "scaling_min_freq"],
+        "max_freq" => ["max_freq", "scaling_max_freq"],
+        _ => return Err(format!("invalid Devfreq frequency attribute: {attribute}")),
+    };
+    names
+        .iter()
+        .map(|name| device.join(name))
+        .find(|path| path.is_file() && is_writable(path))
+        .ok_or_else(|| format!("no writable Devfreq {attribute} interface found"))
+}
+
+fn validate_devfreq_frequency(
+    device: &Path,
+    attribute: &str,
+    requested: u64,
+) -> Result<(), String> {
+    let available = read_required(&device.join("available_frequencies")).ok();
+    if let Some(values) = available {
+        let supported = values
+            .split_whitespace()
+            .filter_map(|value| value.parse::<u64>().ok())
+            .any(|value| value == requested);
+        if !supported {
+            return Err(format!(
+                "GPU frequency is not in the supported table: {requested}"
+            ));
+        }
+    }
+    let current_min = read_optional_first_u64(device, &["min_freq", "scaling_min_freq"]);
+    let current_max = read_optional_first_u64(device, &["max_freq", "scaling_max_freq"]);
+    match attribute {
+        "min_freq" => {
+            if let Some(maximum) = current_max {
+                if requested > maximum {
+                    return Err(format!(
+                        "GPU minimum exceeds current maximum: {requested} > {maximum}"
+                    ));
+                }
+            }
+        }
+        "max_freq" => {
+            if let Some(minimum) = current_min {
+                if requested < minimum {
+                    return Err(format!(
+                        "GPU maximum is below current minimum: {requested} < {minimum}"
+                    ));
+                }
+            }
+        }
+        _ => return Err(format!("invalid Devfreq frequency attribute: {attribute}")),
+    }
+    Ok(())
+}
+
+fn read_optional_first_u64(path: &Path, names: &[&str]) -> Option<u64> {
+    names
+        .iter()
+        .find_map(|name| read_required(&path.join(name)).ok()?.parse().ok())
 }
 
 fn resolve_policy_path(policy: &str) -> Result<PathBuf, String> {
@@ -260,6 +404,10 @@ fn read_required(path: &Path) -> Result<String, String> {
 
 fn read_optional_u64(path: &Path) -> Option<u64> {
     read_required(path).ok()?.parse().ok()
+}
+
+fn is_writable(path: &Path) -> bool {
+    fs::OpenOptions::new().write(true).open(path).is_ok()
 }
 
 fn ensure_writable(path: &Path) -> Result<(), String> {
@@ -307,7 +455,7 @@ fn lock_error(error: io::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_frequency, resolve_policy_path, validate_write_path};
+    use super::{parse_frequency, resolve_devfreq_path, resolve_policy_path, validate_write_path};
     use std::path::Path;
 
     #[test]
@@ -333,5 +481,11 @@ mod tests {
     fn rejects_invalid_policy_names() {
         assert!(resolve_policy_path("policyx").is_err());
         assert!(resolve_policy_path("../policy0").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_devfreq_names() {
+        assert!(resolve_devfreq_path("gpu/device").is_err());
+        assert!(resolve_devfreq_path("gpu$name").is_err());
     }
 }
