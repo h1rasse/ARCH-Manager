@@ -43,4 +43,30 @@ archctl restore
 - Only one ARCH Manager process may run at a time.
 - Restore accepts only `/sys/` and `/proc/sys/` paths.
 - Every operation is logged.
-- Kernel writes will be added only after capability validation and baseline capture are implemented.
+- CPUFreq writes are available only through explicit CLI commands with capability validation and baseline capture.
+
+## Phase 1
+
+Phase 1 adds read-only monitoring for device information, CPUFreq policies, Devfreq devices, thermal zones, power supplies, memory, ZRAM, and block devices.
+
+```sh
+archctl scan
+archctl status
+archctl status --json
+archctl cpu list
+```
+
+The scan output is stored at `/data/adb/arch-manager/state/capabilities.json`.
+
+## Phase 2
+
+Phase 2 adds explicit CPUFreq controls. The command validates the policy, available governor list, hardware frequency limits, current policy limits, write permissions, baseline state, and the value read back after writing.
+
+```sh
+archctl cpu set-governor policy0 schedutil
+archctl cpu set-min policy0 300000
+archctl cpu set-max policy0 1804800
+archctl restore
+```
+
+CPU changes are not applied automatically at boot. The module boot service remains read-only and only performs discovery plus baseline capture.
